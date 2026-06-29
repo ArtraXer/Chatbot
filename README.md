@@ -1,36 +1,52 @@
 # Artraxer AI Agent Premium
 
-Un entorno de desarrollo integrado (IDE) impulsado por Inteligencia Artificial, diseñado para trabajar como un agente programador autónomo. Utiliza modelos avanzados a través de la API de NVIDIA NIM para leer, escribir, y ejecutar código directamente en tu sistema de manera interactiva.
+Un entorno de desarrollo integrado (IDE) impulsado por IA para trabajar como agente programador autónomo. El proyecto combina una interfaz moderna con una capa de herramientas segura para leer, escribir, ejecutar comandos y gestionar archivos de forma controlada.
 
-## Características
+## Qué mejora se aplicó
 
-*   **Agente Autónomo:** Ejecuta instrucciones como crear archivos, carpetas, buscar en la web y ejecutar comandos en terminal.
-*   **Integración con NVIDIA NIM:** Soporte multi-modelo para los LLMs más avanzados del mercado (Llama 3.1 70B, DeepSeek, Mistral Large, etc.).
-*   **Editor y Visor de Código:** Previsualización de archivos en tiempo real con sintaxis resaltada y explorador de archivos tipo árbol.
-*   **Prevención de Errores (Safety):** El usuario debe confirmar cualquier acción destructiva o modificación de archivos existentes.
-*   **Diseño Premium UI:** Interfaz construida en Python con `customtkinter`, ofreciendo un tema oscuro profesional y responsivo.
+- Se consolidó la lógica de seguridad en una implementación reutilizable y compatible.
+- Se preservó la interfaz pública original para no romper el flujo actual del proyecto.
+- Se añadió una guía de configuración básica y un ejemplo de variables de entorno.
+- Se dejó la base preparada para crecer con nuevos módulos sin romper la arquitectura existente.
 
 ## Requisitos
 
-*   Python 3.10 o superior
-*   Clave de API de NVIDIA (`NVIDIA_API_KEY`)
-*   Librerías principales: `customtkinter`, `openai`, `pygments`
+- Python 3.10 o superior
+- Clave de API de NVIDIA en la variable de entorno NVIDIA_API_KEY
+- Dependencias principales: customtkinter, openai, pygments, duckduckgo-search
 
-## Instalación y Ejecución
+## Instalación
 
-1.  Clona este repositorio o descarga los archivos.
-2.  Instala las dependencias necesarias.
-3.  Asegúrate de que la variable de entorno `NVIDIA_API_KEY` esté configurada en tu sistema.
-4.  Ejecuta el programa principal:
+1. Clona este repositorio.
+2. Instala las dependencias:
+   ```bash
+   pip install customtkinter openai pygments duckduckgo-search
+   ```
+3. Copia el archivo de ejemplo de entorno:
+   ```bash
+   cp .env.example .env
+   ```
+4. Completa tu NVIDIA_API_KEY en el archivo .env.
+5. Ejecuta la aplicación:
+   ```bash
+   python main.py
+   ```
+
+## Estructura del proyecto
+
+- main.py: punto de entrada principal y wrapper compatible con la UI.
+- agente.py: wrapper de compatibilidad hacia la capa de runtime del agente.
+- herramientas.py: wrapper de compatibilidad hacia la capa de servicios seguros.
+- herramientas_v2.py: implementación de referencia para operaciones seguras del sistema.
+- modelos.py: catálogo de modelos NVIDIA NIM.
+- iconos.py: mapeo visual de iconos por tipo de archivo.
+- core/: capa interna por responsabilidades (seguridad, servicios, runtime y modelos).
+- ui/: capa de presentación y experiencia de usuario.
+
+## Verificación
+
+La base fue revisada con la suite de pruebas disponible:
 
 ```bash
-python main.py
+python -m unittest discover -s tests -q
 ```
-
-## Estructura de Archivos
-
-*   `main.py`: Punto de entrada de la aplicación y lógica de la Interfaz Gráfica (UI).
-*   `agente.py`: Lógica del agente LLM, prompts del sistema y parsing de comandos.
-*   `herramientas.py`: Funciones de sistema que el agente utiliza para interactuar con tu PC (leer/escribir archivos, ejecutar comandos).
-*   `modelos.py`: Catálogo validado de modelos de NVIDIA NIM compatibles con la aplicación.
-*   `iconos.py`: Gestión de iconos visuales para el explorador de archivos.
