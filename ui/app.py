@@ -9,12 +9,24 @@ from tkinter import filedialog, simpledialog, messagebox
 from agente import pensar, limpiar_memoria, get_memoria_size, set_instrucciones
 from herramientas import listar_archivos, set_directorio_base, get_directorio_base, escribir_archivo
 from iconos import obtener_icono
+from core.state import (
+    append_conversation,
+    append_task,
+    clear_history,
+    clear_tasks,
+    load_conversations,
+    load_settings,
+    load_tasks,
+    save_settings,
+)
 
 # Snapshot del árbol de archivos para detectar cambios
 _ultimo_snapshot = set()
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+SETTINGS = load_settings()
 
 app = ctk.CTk()
 app.title("Artraxer AI Agent Premium")
@@ -549,20 +561,32 @@ botones_header.pack(side="right", padx=10)
 def abrir_ajustes():
     ventana = ctk.CTkToplevel(app)
     ventana.title("⚙️ Ajustes del agente")
-    ventana.geometry("500x400")
+    ventana.geometry("560x480")
     ventana.grab_set()
-    
-    ctk.CTkLabel(ventana, text="Instrucciones Extra (System Prompt):", font=("Arial", 14, "bold")).pack(pady=10)
-    
+
+    ctk.CTkLabel(ventana, text="Instrucciones Extra (System Prompt):", font=("Arial", 14, "bold")).pack(pady=(10, 4))
+
     from agente import instrucciones_extra
     caja = ctk.CTkTextbox(ventana, font=("Arial", 14), wrap="word")
-    caja.pack(fill="both", expand=True, padx=20, pady=10)
+    caja.pack(fill="both", expand=True, padx=20, pady=(0, 10))
     caja.insert("0.0", instrucciones_extra)
-    
+
+    ctk.CTkLabel(ventana, text="Modelo por defecto:", font=("Arial", 12, "bold")).pack(anchor="w", padx=20)
+    selector_ajustes = ctk.CTkOptionMenu(ventana, values=MODELOS_GRATIS, width=260)
+    selector_ajustes.pack(anchor="w", padx=20, pady=(4, 8))
+    selector_ajustes.set(SETTINGS.get("model", MODELOS_GRATIS[0]))
+
+    safe_var = tk.BooleanVar(value=SETTINGS.get("safe_mode", True))
+    ctk.CTkCheckBox(ventana, text="Modo seguro visible activo", variable=safe_var).pack(anchor="w", padx=20, pady=(0, 6))
+
     def guardar_ajustes():
         set_instrucciones(caja.get("0.0", "end-1c"))
+        SETTINGS["model"] = selector_ajustes.get()
+        SETTINGS["safe_mode"] = bool(safe_var.get())
+        save_settings(SETTINGS)
+        selector_modelo.set(SETTINGS["model"])
         ventana.destroy()
-        
+
     ctk.CTkButton(ventana, text="Guardar Ajustes", command=guardar_ajustes).pack(pady=10)
 
 btn_ajustes = ctk.CTkButton(
@@ -613,6 +637,27 @@ def limpiar_memoria_ui():
     actualizar_medidor_memoria()
     escribir("🧠 Memoria borrada. Nuevo chat iniciado.\n")
 
+# -------- PANEL DE TAREAS Y TRAZABILIDAD --------
+tasks_frame = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=10)
+tasks_frame.pack(fill="x", padx=12, pady=(8, 0))
+
+ctk.CTkLabel(tasks_frame, text="🧭 Tareas y trazabilidad", font=("Inter", 12, "bold")).pack(anchor="w", padx=10, pady=(8, 4))
+tasks_box = ctk.CTkTextbox(tasks_frame, height=120, font=("Inter", 12), wrap="word")
+tasks_box.pack(fill="x", padx=10, pady=(0, 8))
+tasks_box.configure(state="disabled")
+
+
+def actualizar_panel_tareas():
+    tasks_box.configure(state="normal")
+    tasks_box.delete("0.0", "end")
+    tareas = load_tasks()
+    if not tareas:
+        tasks_box.insert("end", "No hay tareas registradas aún.\n")
+    else:
+        for item in reversed(tareas[-8:]):
+            tasks_box.insert("end", f"[{item.get('estado','completado')}] {item.get('detalle','')}\n")
+    tasks_box.configure(state="disabled")
+
 # -------- CHAT --------
 chat = ctk.CTkTextbox(
     right_pane, corner_radius=12,
@@ -647,6 +692,7 @@ selector_modelo = ctk.CTkOptionMenu(
     dropdown_fg_color="#22253a", dropdown_hover_color="#2f3655"
 )
 selector_modelo.pack(side="left")
+selector_modelo.set(SETTINGS.get("model", modelos[0]))
 
 def btn_cancelar_accion():
     global cancelar_generacion
@@ -672,6 +718,26 @@ entrada = ctk.CTkEntry(
 )
 entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
+sugerencias_frame = ctk.CTkFrame(zona, fg_color="transparent")
+sugerencias_frame.pack(fill="x", padx=8, pady=(0, 8))
+sugerencias_label = ctk.CTkLabel(sugerencias_frame, text="", font=("Inter", 11), text_color="#7f8c8d")
+sugerencias_label.pack(anchor="w")
+
+sugerencias_panel = ctk.CTkFrame(
+    zona,
+    fg_color="#161a2b",
+    border_width=1,
+    border_color="#2f3655",
+    corner_radius=8,
+)
+sugerencias_panel.pack(fill="x", padx=8, pady=(0, 8))
+sugerencias_panel.pack_forget()
+
+sugerencias_actuales = []
+sugerencia_index = 0
+modo_sugerencia = False
+sugerencias_botones = []
+
 boton = ctk.CTkButton(
     fila_input, text="↑ Enviar", width=90, height=40,
     fg_color="#3d4775", hover_color="#5468a8",
@@ -686,6 +752,139 @@ def escribir(texto, end="\n\n", tags=None):
     else:
         chat.insert("end", texto + end)
     chat.see("end")
+
+
+def obtener_sugerencias(texto: str):
+    base_dir = get_directorio_base()
+    if not os.path.isdir(base_dir):
+        return []
+
+    texto = texto.strip()
+    if not texto:
+        return []
+
+    if texto.startswith("@"):
+        termino = texto[1:].strip().lower()
+    else:
+        termino = texto.lower()
+
+    if not termino:
+        return []
+
+    candidatos = []
+    for path in os.walk(base_dir):
+        root, dirs, files = path
+        for name in files + dirs:
+            if name.startswith('.'):
+                continue
+            rel = os.path.relpath(os.path.join(root, name), base_dir)
+            rel_lower = rel.lower()
+            if rel_lower.startswith(termino) or rel_lower.endswith(termino) or termino in rel_lower:
+                candidatos.append(rel)
+    candidatos = sorted(set(candidatos))
+    if len(candidatos) > 8:
+        candidatos = candidatos[:8]
+    return candidatos
+
+
+def mostrar_sugerencias(event=None):
+    global sugerencias_actuales, sugerencia_index, modo_sugerencia
+
+    if event is not None and event.keysym in {"Up", "Down", "Tab", "Return", "Escape"}:
+        return
+
+    texto = entrada.get().strip()
+    if not texto.startswith("@"):
+        sugerencias_actuales = []
+        sugerencia_index = 0
+        modo_sugerencia = False
+        actualizar_panel_sugerencias()
+        return
+
+    sugerencias_actuales = obtener_sugerencias(texto)
+    sugerencia_index = 0
+    modo_sugerencia = bool(sugerencias_actuales)
+    actualizar_panel_sugerencias()
+
+
+def actualizar_panel_sugerencias():
+    global sugerencias_actuales, sugerencia_index, modo_sugerencia
+
+    if not modo_sugerencia or not sugerencias_actuales:
+        for boton in sugerencias_botones:
+            boton.pack_forget()
+        sugerencias_panel.pack_forget()
+        sugerencias_label.configure(text="")
+        return
+
+    sugerencias_panel.pack(fill="x", padx=8, pady=(0, 8))
+    sugerencias_label.configure(text="Usa ↑↓ para moverte y Tab para aceptar")
+
+    while len(sugerencias_botones) < len(sugerencias_actuales):
+        boton = ctk.CTkButton(
+            sugerencias_panel,
+            text="",
+            anchor="w",
+            fg_color="#1f2438",
+            hover_color="#2f3655",
+            text_color="white",
+            height=28,
+            corner_radius=6,
+            command=None,
+        )
+        boton.pack(fill="x", padx=6, pady=2)
+        sugerencias_botones.append(boton)
+
+    while len(sugerencias_botones) > len(sugerencias_actuales):
+        boton = sugerencias_botones.pop()
+        boton.destroy()
+
+    for idx, boton in enumerate(sugerencias_botones):
+        sugerencia = sugerencias_actuales[idx]
+        boton.configure(
+            text=sugerencia,
+            fg_color="#3d4775" if idx == sugerencia_index else "#1f2438",
+            command=lambda i=idx: seleccionar_sugerencia(i),
+        )
+        boton.pack(fill="x", padx=6, pady=2)
+
+
+def seleccionar_sugerencia(index):
+    global sugerencia_index
+    if not sugerencias_actuales:
+        return
+    sugerencia_index = max(0, min(index, len(sugerencias_actuales) - 1))
+    actualizar_panel_sugerencias()
+
+
+def mover_sugerencia(delta):
+    global sugerencias_actuales, sugerencia_index, modo_sugerencia
+    texto_actual = entrada.get().strip()
+    if not modo_sugerencia or not sugerencias_actuales or not texto_actual.startswith("@"):
+        return "break"
+
+    sugerencia_index = (sugerencia_index + delta) % len(sugerencias_actuales)
+    actualizar_panel_sugerencias()
+    return "break"
+
+
+def aceptar_sugerencia(event=None):
+    global sugerencias_actuales, sugerencia_index, modo_sugerencia
+    texto_actual = entrada.get().strip()
+    if not modo_sugerencia or not sugerencias_actuales or not texto_actual.startswith("@"):
+        return "break"
+
+    if sugerencia_index >= len(sugerencias_actuales):
+        sugerencia_index = 0
+
+    sugerencia = sugerencias_actuales[sugerencia_index]
+    entrada.delete(0, "end")
+    entrada.insert(0, f"@{sugerencia}")
+    modo_sugerencia = False
+    sugerencias_actuales = []
+    sugerencia_index = 0
+    actualizar_panel_sugerencias()
+    return "break"
 
 def check_cancel():
     global cancelar_generacion
@@ -747,18 +946,24 @@ def parse_and_insert(texto, start_index):
 def responder(auto_mensaje=None):
     global cancelar_generacion, auto_corregido
     cancelar_generacion = False
-    
+
     if auto_mensaje:
         mensaje = auto_mensaje
     else:
         mensaje = entrada.get()
-        auto_corregido = False 
+        auto_corregido = False
 
     if mensaje == "":
         return
 
+    modo_programacion = "plan" in mensaje.lower() or "pasos" in mensaje.lower() or "modo programación" in mensaje.lower()
+    if modo_programacion:
+        mensaje = f"Actúa como agente de programación. Divide esta solicitud en pasos claros y explícitos. Solicitud: {mensaje}"
+        append_task("plan", f"Planificando: {mensaje[:80]}")
+
     entrada.delete(0, "end")
-    
+    append_conversation({"role": "user", "content": mensaje})
+
     if not auto_mensaje:
         escribir("👤 Tú:\n" + mensaje)
     else:
@@ -836,6 +1041,11 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
                 app.after(0, lambda: chat.insert("end", "\n\n"))
                 app.after(0, actualizar_arbol_archivos)
                 app.after(0, actualizar_medidor_memoria)
+                app.after(0, actualizar_panel_tareas)
+                append_conversation({"role": "assistant", "content": texto_acumulado})
+                append_task("respuesta", f"Respuesta procesada para: {mensaje[:80]}")
+                if "plan" in mensaje.lower() or "pasos" in mensaje.lower() or "modo programación" in mensaje.lower():
+                    append_task("programacion", "Se activó el modo agente de programación")
                 
                 comando_info = comando_output if comando_output else (None, False)
                 output_texto, auto_reply = comando_info
@@ -860,7 +1070,29 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
         app.after(0, lambda err=str(e), details=err_details: escribir(f"\n[Error de conexión o API: {err}]\n{details}"))
 
 entrada.bind("<Return>", lambda e: responder())
+entrada.bind("<KeyRelease>", lambda e: mostrar_sugerencias(e))
+entrada.bind("<Tab>", aceptar_sugerencia)
+entrada.bind("<KeyPress-Up>", lambda e: mover_sugerencia(-1))
+entrada.bind("<KeyPress-Down>", lambda e: mover_sugerencia(1))
+entrada.bind("<Up>", lambda e: mover_sugerencia(-1))
+entrada.bind("<Down>", lambda e: mover_sugerencia(1))
 entrada.focus()
+
+# -------- HISTORIAL DE CONVERSACIONES --------
+def cargar_historial_ui():
+    historial = load_conversations()
+    if not historial:
+        return
+    for item in historial[-12:]:
+        rol = item.get("role", "assistant")
+        contenido = item.get("content", "")
+        if rol == "user":
+            escribir(f"👤 Tú:\n{contenido}")
+        else:
+            escribir(f"🤖 Agente:\n{contenido}")
+
+cargar_historial_ui()
+actualizar_panel_tareas()
 
 # -------- VIGILANTE DE ARCHIVOS (Auto-Sync cada 2s) --------
 def vigilar_archivos():
