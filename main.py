@@ -263,9 +263,9 @@ def _nueva_carpeta_en(ruta_carpeta):
             _mostrar_error(f"No se pudo crear: {e}")
 
 # -------- PANEL DERECHO: CHAT IA --------
-right_pane = ctk.CTkFrame(main_frame, width=400, fg_color="transparent")
-right_pane.pack(side="right", fill="y", padx=(10, 20), pady=20)
-right_pane.pack_propagate(False) # Evitar que se encoja automáticamente
+right_pane = ctk.CTkFrame(main_frame, width=420, fg_color="#1a1d2e", corner_radius=16)
+right_pane.pack(side="right", fill="y", padx=(8, 16), pady=16)
+right_pane.pack_propagate(False)
 
 # -------- PANEL CENTRAL: EDITOR Y TERMINAL --------
 middle_pane = ctk.CTkFrame(main_frame, fg_color="transparent")
@@ -528,9 +528,22 @@ def actualizar_arbol_archivos(forzar=False):
 
 
 # El contenido principal ahora usa top_controls y zona que deben empaquetarse en right_pane
-# -------- CONTROLES SUPERIORES --------
-top_controls = ctk.CTkFrame(right_pane, fg_color="transparent")
-top_controls.pack(fill="x", pady=(0, 5))
+# -------- CABECERA DEL PANEL DERECHO --------
+agente_header = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=12)
+agente_header.pack(fill="x", padx=12, pady=(12, 0))
+
+agente_avatar = ctk.CTkLabel(agente_header, text="🤖", font=("Arial", 28))
+agente_avatar.pack(side="left", padx=(14, 6), pady=10)
+
+agente_info = ctk.CTkFrame(agente_header, fg_color="transparent")
+agente_info.pack(side="left", fill="y", pady=8)
+ctk.CTkLabel(agente_info, text="Agente AI", font=("Inter", 15, "bold"), text_color="#e8eaf6").pack(anchor="w")
+lbl_estado = ctk.CTkLabel(agente_info, text="● Activo", font=("Inter", 11), text_color="#2ecc71")
+lbl_estado.pack(anchor="w")
+
+# Ajustes y limpiar en la cabecera
+botones_header = ctk.CTkFrame(agente_header, fg_color="transparent")
+botones_header.pack(side="right", padx=10)
 
 # Ajustes
 def abrir_ajustes():
@@ -552,18 +565,33 @@ def abrir_ajustes():
         
     ctk.CTkButton(ventana, text="Guardar Ajustes", command=guardar_ajustes).pack(pady=10)
 
-btn_ajustes = ctk.CTkButton(top_controls, text="⚙️", width=40, height=30, fg_color="#34495e", hover_color="#2c3e50", command=abrir_ajustes)
-btn_ajustes.pack(side="left", padx=(0, 10))
+btn_ajustes = ctk.CTkButton(
+    botones_header, text="⚙️", width=34, height=34,
+    fg_color="#2f3655", hover_color="#3d4775",
+    corner_radius=8, font=("Arial", 14), command=abrir_ajustes
+)
+btn_ajustes.pack(side="left", padx=(0, 6))
 
-# Medidor de Memoria
-frame_memoria = ctk.CTkFrame(top_controls, fg_color="transparent")
-frame_memoria.pack(side="left", fill="x", expand=True)
-ctk.CTkLabel(frame_memoria, text="Memoria:", font=("Arial", 12)).pack(side="left", padx=5)
-barra_memoria = ctk.CTkProgressBar(frame_memoria, width=200, height=10)
-barra_memoria.pack(side="left", padx=5)
+btn_limpiar_icono = ctk.CTkButton(
+    botones_header, text="🗑️", width=34, height=34,
+    fg_color="#3d1f2a", hover_color="#6b2737",
+    corner_radius=8, font=("Arial", 14), command=lambda: limpiar_memoria_ui()
+)
+btn_limpiar_icono.pack(side="left")
+
+# -------- BARRA DE MEMORIA --------
+mem_bar_frame = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=10)
+mem_bar_frame.pack(fill="x", padx=12, pady=(6, 0))
+
+mem_row = ctk.CTkFrame(mem_bar_frame, fg_color="transparent")
+mem_row.pack(fill="x", padx=10, pady=(6, 2))
+ctk.CTkLabel(mem_row, text="Memoria del contexto:", font=("Inter", 11), text_color="#8892b0").pack(side="left")
+lbl_tokens = ctk.CTkLabel(mem_row, text="0 / 8000 tokens", font=("Inter", 10), text_color="#636b8c")
+lbl_tokens.pack(side="right")
+
+barra_memoria = ctk.CTkProgressBar(mem_bar_frame, height=6, corner_radius=3)
+barra_memoria.pack(fill="x", padx=10, pady=(0, 8))
 barra_memoria.set(0)
-lbl_tokens = ctk.CTkLabel(frame_memoria, text="0 / 8000 tokens", font=("Arial", 10, "italic"), text_color="gray")
-lbl_tokens.pack(side="left")
 
 def actualizar_medidor_memoria():
     tokens = get_memoria_size()
@@ -573,11 +601,11 @@ def actualizar_medidor_memoria():
     lbl_tokens.configure(text=f"{tokens} / {max_tokens} tokens")
     
     if progreso > 0.8:
-        barra_memoria.configure(progress_color="#e74c3c") # Rojo
+        barra_memoria.configure(progress_color="#e74c3c")
     elif progreso > 0.5:
-        barra_memoria.configure(progress_color="#f1c40f") # Amarillo
+        barra_memoria.configure(progress_color="#f1c40f")
     else:
-        barra_memoria.configure(progress_color="#2ecc71") # Verde
+        barra_memoria.configure(progress_color="#2ecc71")
 
 def limpiar_memoria_ui():
     limpiar_memoria()
@@ -585,12 +613,16 @@ def limpiar_memoria_ui():
     actualizar_medidor_memoria()
     escribir("🧠 Memoria borrada. Nuevo chat iniciado.\n")
 
-btn_limpiar = ctk.CTkButton(top_controls, text="Limpiar memoria", width=120, height=30, fg_color="#b33939", hover_color="#cd6133", command=limpiar_memoria_ui)
-btn_limpiar.pack(side="right")
-
 # -------- CHAT --------
-chat = ctk.CTkTextbox(right_pane, corner_radius=15, font=("Arial", 16), wrap="word")
-chat.pack(pady=(10, 0), fill="both", expand=True)
+chat = ctk.CTkTextbox(
+    right_pane, corner_radius=12,
+    font=("Inter", 15), wrap="word",
+    fg_color="#12141f",
+    text_color="#cdd6f4",
+    scrollbar_button_color="#2f3655",
+    scrollbar_button_hover_color="#3d4775"
+)
+chat.pack(pady=(8, 0), fill="both", expand=True, padx=12)
 
 # Configurar tags de sintaxis
 chat.tag_config("code", foreground="#78e08f")
@@ -598,8 +630,8 @@ chat.tag_config("thought", foreground="#7f8c8d")
 chat.tag_config("normal", foreground="white")
 
 # -------- ENTRADA --------
-zona = ctk.CTkFrame(right_pane, fg_color="transparent")
-zona.pack(fill="x", pady=(5, 0))
+zona = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=12)
+zona.pack(fill="x", padx=12, pady=(8, 12))
 
 modelos = [
     "meta/llama-3.1-8b-instruct",
@@ -609,11 +641,49 @@ modelos = [
     "nvidia/nemotron-4-340b-instruct"
 ]
 
-selector_modelo = ctk.CTkOptionMenu(zona, values=modelos, width=200, height=45, font=("Arial", 14))
-selector_modelo.pack(side="left", padx=(0, 10))
+# Fila selector + cancelar
+fila_top = ctk.CTkFrame(zona, fg_color="transparent")
+fila_top.pack(fill="x", padx=8, pady=(8, 4))
 
-entrada = ctk.CTkEntry(zona, placeholder_text="Escribe una orden...", height=45, font=("Arial", 16))
-entrada.pack(side="left", fill="x", expand=True)
+selector_modelo = ctk.CTkOptionMenu(
+    fila_top, values=modelos, width=230, height=32,
+    font=("Inter", 12),
+    fg_color="#2f3655", button_color="#3d4775", button_hover_color="#4a5590",
+    dropdown_fg_color="#22253a", dropdown_hover_color="#2f3655"
+)
+selector_modelo.pack(side="left")
+
+def btn_cancelar_accion():
+    global cancelar_generacion
+    cancelar_generacion = True
+
+btn_cancelar = ctk.CTkButton(
+    fila_top, text="⏹ Parar", width=90, height=32,
+    fg_color="#3d1f2a", hover_color="#6b2737",
+    corner_radius=8, font=("Inter", 12),
+    command=btn_cancelar_accion
+)
+btn_cancelar.pack(side="right")
+
+# Fila entrada + enviar
+fila_input = ctk.CTkFrame(zona, fg_color="transparent")
+fila_input.pack(fill="x", padx=8, pady=(0, 8))
+
+entrada = ctk.CTkEntry(
+    fila_input, placeholder_text="Escribe una orden al agente...",
+    height=40, font=("Inter", 14),
+    fg_color="#1a1d2e", border_color="#2f3655",
+    border_width=1, corner_radius=8
+)
+entrada.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+boton = ctk.CTkButton(
+    fila_input, text="↑ Enviar", width=90, height=40,
+    fg_color="#3d4775", hover_color="#5468a8",
+    corner_radius=8, font=("Inter", 13, "bold"),
+    command=lambda: responder()
+)
+boton.pack(side="right")
 
 def escribir(texto, end="\n\n", tags=None):
     if tags:
@@ -626,15 +696,8 @@ def check_cancel():
     global cancelar_generacion
     return cancelar_generacion
 
-def btn_cancelar_accion():
-    global cancelar_generacion
-    cancelar_generacion = True
 
-btn_cancelar = ctk.CTkButton(zona, text="Cancelar", width=90, height=45, fg_color="#718093", hover_color="#2f3640", command=btn_cancelar_accion)
-btn_cancelar.pack(side="left", padx=(10, 0))
 
-boton = ctk.CTkButton(zona, text="Enviar", width=100, height=45, command=lambda: responder())
-boton.pack(side="right", padx=(10, 0))
 
 def parse_and_insert(texto, start_index):
     # Borrar el texto actual del asistente para re-insertarlo con formato
