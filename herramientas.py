@@ -13,9 +13,32 @@ def get_directorio_base():
 def listar_archivos():
     archivos = []
     for ruta, carpetas, ficheros in os.walk(DIRECTORIO_BASE):
+        # Exclude hidden dirs
+        carpetas[:] = [c for c in carpetas if not c.startswith('.')]
         for f in ficheros:
-            archivos.append(os.path.join(ruta, f))
+            if not f.startswith('.'):
+                ruta_abs = os.path.join(ruta, f)
+                ruta_rel = os.path.relpath(ruta_abs, DIRECTORIO_BASE)
+                archivos.append(ruta_rel)
     return archivos
+
+def listar_arbol():
+    """Genera un árbol de directorios visual con rutas relativas."""
+    lineas = []
+    for ruta, carpetas, ficheros in os.walk(DIRECTORIO_BASE):
+        carpetas[:] = sorted([c for c in carpetas if not c.startswith('.')])
+        nivel = os.path.relpath(ruta, DIRECTORIO_BASE).count(os.sep)
+        if ruta == DIRECTORIO_BASE:
+            lineas.append("/  (raíz del proyecto)")
+        else:
+            nombre = os.path.basename(ruta)
+            indent = "  " * nivel
+            lineas.append(f"{indent}📁 {nombre}/")
+        sub_indent = "  " * (nivel + 1)
+        for f in sorted(ficheros):
+            if not f.startswith('.'):
+                lineas.append(f"{sub_indent}📄 {f}")
+    return "\n".join(lineas)
 
 def leer_archivo(nombre):
     ruta_completa = os.path.join(DIRECTORIO_BASE, nombre)

@@ -65,6 +65,203 @@ separador.pack(fill="x", pady=(0, 10))
 frame_lista_archivos = ctk.CTkFrame(sidebar, fg_color="transparent")
 frame_lista_archivos.pack(fill="both", expand=True)
 
+# Estado de carpetas expandidas (persistente entre recargas del árbol)
+carpetas_expandidas = set()
+
+# -------- FUNCIÓN CAMBIAR DIRECTORIO --------
+def cambiar_directorio():
+    ruta = filedialog.askdirectory(title="Seleccionar carpeta de trabajo")
+    if ruta:
+        set_directorio_base(ruta)
+        nombre_carpeta = os.path.basename(ruta)
+        titulo_archivos.configure(text=nombre_carpeta)
+        actualizar_arbol_archivos(forzar=True)
+
+# -------- MENÚ CONTEXTUAL CUSTOMTKINTER --------
+class MenuContextualCustom(ctk.CTkToplevel):
+    def __init__(self, parent, x, y, opciones):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.geometry(f"+{x+5}+{y+5}")
+        self.attributes("-topmost", True)
+        
+        self.frame = ctk.CTkFrame(self, fg_color="#2f3640", corner_radius=8, border_width=1, border_color="#353b48")
+        self.frame.pack(fill="both", expand=True)
+        
+        for texto, comando in opciones:
+            if texto == "-":
+                ctk.CTkFrame(self.frame, height=1, fg_color="#4b4b4b").pack(fill="x", padx=10, pady=2)
+            else:
+                btn = ctk.CTkButton(
+                    self.frame, text=texto, anchor="w", fg_color="transparent",
+                    hover_color="#3498db", text_color="white", font=("Arial", 13),
+                    command=lambda c=comando: self._ejecutar_y_cerrar(c)
+                )
+                btn.pack(fill="x", padx=2, pady=2)
+                
+        self.bind("<Escape>", lambda e: self._cerrar_limpio())
+        self.after(100, self._activar_cierre_global)
+
+    def _activar_cierre_global(self):
+        self._bind_id_1 = app.bind_all("<Button-1>", self._cerrar_si_fuera, add="+")
+        self._bind_id_3 = app.bind_all("<Button-3>", self._cerrar_si_fuera, add="+")
+
+    def _cerrar_si_fuera(self, event):
+        if event.widget.winfo_toplevel() != self:
+            self._cerrar_limpio()
+            
+    def _cerrar_limpio(self):
+        try:
+            app.unbind_all("<Button-1>")
+            app.unbind_all("<Button-3>")
+        except:
+            pass
+        self.destroy()
+
+    def _ejecutar_y_cerrar(self, comando):
+        self._cerrar_limpio()
+        if comando:
+            comando()
+
+# -------- MENÚS CONTEXTUALES --------
+def mostrar_menu_raiz(event):
+    base = get_directorio_base()
+    opciones = [
+        ("📄 Nuevo archivo", lambda: _nuevo_archivo_en(base)),
+        ("📁 Nueva carpeta", lambda: _nueva_carpeta_en(base))
+    ]
+    MenuContextualCustom(app, event.x_root, event.y_root, opciones)
+
+frame_lista_archivos.bind("<Button-3>", mostrar_menu_raiz)
+try:
+    sidebar._parent_canvas.bind("<Button-3>", mostrar_menu_raiz)
+except:
+    sidebar.bind("<Button-3>", mostrar_menu_raiz)
+
+def mostrar_menu_archivo(event, ruta_absoluta, nombre):
+    opciones = [
+        ("👁️ Previsualizar", lambda: _preview(ruta_absoluta, nombre)),
+        ("✏️ Editar", lambda: abrir_editor(ruta_absoluta, nombre)),
+        ("-", None),
+        ("📝 Renombrar", lambda: _renombrar_archivo(ruta_absoluta, nombre)),
+        ("🗑️ Eliminar", lambda: _eliminar_archivo(ruta_absoluta, nombre))
+    ]
+    MenuContextualCustom(app, event.x_root, event.y_root, opciones)
+
+def mostrar_menu_carpeta(event, ruta_absoluta, nombre):
+    opciones = [
+        ("📄 Nuevo archivo", lambda: _nuevo_archivo_en(ruta_absoluta)),
+        ("📁 Nueva carpeta", lambda: _nueva_carpeta_en(ruta_absoluta)),
+        ("-", None),
+        ("📝 Renombrar", lambda: _renombrar_archivo(ruta_absoluta, nombre)),
+        ("🗑️ Eliminar carpeta", lambda: _eliminar_carpeta(ruta_absoluta, nombre))
+    ]
+    MenuContextualCustom(app, event.x_root, event.y_root, opciones)
+
+# -------- FUNCIONES DE ARCHIVOS --------
+def _preview(ruta, nombre):
+    try:
+        with open(ruta, "r", encoding="utf-8") as f:
+            contenido = f.read()
+        chat.insert("end", f"👁️ Previsualizando: {nombre}\n\n{contenido}\n\n")
+        chat.see("end")
+    except Exception as e:
+        chat.insert("end", f"⚠️ Error: {e}\n\n")
+        chat.see("end")
+
+def _pedir_texto(titulo, mensaje):
+    dialogo = ctk.CTkInputDialog(text=mensaje, title=titulo)
+    return dialogo.get_input()
+
+def _confirmar_accion(titulo, mensaje):
+    resultado = [False]
+    evento = threading.Event()
+    
+    def mostrar_dialogo():
+        ventana = ctk.CTkToplevel(app)
+        ventana.title(titulo)
+        ventana.geometry("400x200")
+        ventana.grab_set()
+        
+        ctk.CTkLabel(ventana, text=mensaje, font=("Arial", 14), wraplength=350).pack(pady=30)
+        
+        botones_frame = ctk.CTkFrame(ventana, fg_color="transparent")
+        botones_frame.pack(fill="x", pady=10)
+        
+        def al_aceptar():
+            resultado[0] = True
+            ventana.destroy()
+            evento.set()
+            
+        def al_rechazar():
+            resultado[0] = False
+            ventana.destroy()
+            evento.set()
+            
+        ctk.CTkButton(botones_frame, text="✅ Sí", fg_color="#c0392b", hover_color="#e74c3c", command=al_aceptar, width=100).pack(side="left", expand=True, padx=10)
+        ctk.CTkButton(botones_frame, text="❌ No", fg_color="#7f8c8d", hover_color="#95a5a6", command=al_rechazar, width=100).pack(side="right", expand=True, padx=10)
+        
+        ventana.protocol("WM_DELETE_WINDOW", al_rechazar)
+
+    app.after(0, mostrar_dialogo)
+    evento.wait()
+    return resultado[0]
+
+def _mostrar_error(mensaje):
+    app.after(0, lambda: chat.insert("end", f"⚠️ Error: {mensaje}\n\n"))
+    app.after(0, lambda: chat.see("end"))
+
+def _renombrar_archivo(ruta_absoluta, nombre_actual):
+    nuevo_nombre = _pedir_texto("Renombrar", f"Nuevo nombre para:\n'{nombre_actual}'")
+    if nuevo_nombre and nuevo_nombre != nombre_actual:
+        nueva_ruta = os.path.join(os.path.dirname(ruta_absoluta), nuevo_nombre)
+        try:
+            os.rename(ruta_absoluta, nueva_ruta)
+            actualizar_arbol_archivos(forzar=True)
+        except Exception as e:
+            _mostrar_error(f"No se pudo renombrar: {e}")
+
+def _eliminar_archivo(ruta_absoluta, nombre):
+    def proceso_eliminar():
+        if _confirmar_accion("Confirmar eliminación", f"¿Estás seguro de que quieres eliminar:\n\n'{nombre}'?"):
+            try:
+                os.remove(ruta_absoluta)
+                app.after(0, lambda: actualizar_arbol_archivos(forzar=True))
+            except Exception as e:
+                _mostrar_error(f"No se pudo eliminar: {e}")
+    threading.Thread(target=proceso_eliminar, daemon=True).start()
+
+def _eliminar_carpeta(ruta_absoluta, nombre):
+    def proceso_eliminar():
+        if _confirmar_accion("Confirmar eliminación", f"¿Eliminar la carpeta '{nombre}' y TODO su contenido?\n\n⚠️ Esta acción no se puede deshacer."):
+            try:
+                shutil.rmtree(ruta_absoluta)
+                app.after(0, lambda: actualizar_arbol_archivos(forzar=True))
+            except Exception as e:
+                _mostrar_error(f"No se pudo eliminar: {e}")
+    threading.Thread(target=proceso_eliminar, daemon=True).start()
+
+def _nuevo_archivo_en(ruta_carpeta):
+    nombre = _pedir_texto("Nuevo archivo", "Nombre del nuevo archivo (ej: app.py):")
+    if nombre:
+        ruta = os.path.join(ruta_carpeta, nombre)
+        try:
+            with open(ruta, "w", encoding="utf-8") as f:
+                f.write("")
+            actualizar_arbol_archivos(forzar=True)
+        except Exception as e:
+            _mostrar_error(f"No se pudo crear: {e}")
+
+def _nueva_carpeta_en(ruta_carpeta):
+    nombre = _pedir_texto("Nueva carpeta", "Nombre de la nueva carpeta:")
+    if nombre:
+        ruta = os.path.join(ruta_carpeta, nombre)
+        try:
+            os.makedirs(ruta, exist_ok=True)
+            actualizar_arbol_archivos(forzar=True)
+        except Exception as e:
+            _mostrar_error(f"No se pudo crear: {e}")
+
 # -------- PANEL DERECHO: CHAT IA --------
 right_pane = ctk.CTkFrame(main_frame, width=400, fg_color="transparent")
 right_pane.pack(side="right", fill="y", padx=(10, 20), pady=20)
@@ -510,7 +707,9 @@ def responder(auto_mensaje=None):
         escribir(f"🤖 Ejecución automática:\n{mensaje}")
         
     escribir("🤖 Agente:\n", end="")
-    idx_inicio_respuesta = chat.index("end-1c")
+    chat.mark_set("inicio_respuesta", "end-1c")
+    chat.mark_gravity("inicio_respuesta", "left")
+    idx_inicio_respuesta = "inicio_respuesta"
 
     modelo_seleccionado = selector_modelo.get()
     
@@ -545,7 +744,7 @@ def responder(auto_mensaje=None):
                 ventana.destroy()
                 evento.set()
                 
-            ctk.CTkButton(botones_frame, text="✅ Aceptar Cambios", fg_color="#27ae60", hover_color="#2ecc71", command=al_aceptar).pack(side="left", expand=True, padx=10)
+            ctk.CTkButton(botones_frame, text="✅ Aceptar cambios", fg_color="#27ae60", hover_color="#2ecc71", command=al_aceptar).pack(side="left", expand=True, padx=10)
             ctk.CTkButton(botones_frame, text="❌ Rechazar", fg_color="#c0392b", hover_color="#e74c3c", command=al_rechazar).pack(side="right", expand=True, padx=10)
             
             # Por si el usuario cierra la ventana con la X
@@ -565,8 +764,11 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
     global auto_corregido
     
     texto_acumulado = ""
+    def _print_to_terminal(msg):
+        app.after(0, lambda: escribir_terminal(msg))
+        
     try:
-        generador = pensar(mensaje, modelo, check_cancel, confirmacion_ui_segura)
+        generador = pensar(mensaje, modelo, check_cancel, confirmacion_ui_segura, _print_to_terminal)
         
         for fragmento, terminado, comando_output in generador:
             if not terminado:
@@ -577,12 +779,18 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
                 app.after(0, actualizar_arbol_archivos)
                 app.after(0, actualizar_medidor_memoria)
                 
-                if comando_output:
+                comando_info = comando_output if comando_output else (None, False)
+                output_texto, auto_reply = comando_info
+                
+                if output_texto:
                     if not auto_corregido:
                         auto_corregido = True
-                        app.after(0, lambda o=comando_output: responder(auto_mensaje=o))
+                        if auto_reply:
+                            app.after(0, lambda o=output_texto: responder(auto_mensaje=o))
+                        else:
+                            app.after(0, lambda o=output_texto: escribir(f"🤖 Ejecución automática (silenciosa):\n{o}"))
                     else:
-                        app.after(0, lambda o=comando_output: escribir(f"⚠️ Se ha ejecutado el comando pero se ha alcanzado el límite de auto-corrección automática.\n{o}"))
+                        app.after(0, lambda o=output_texto: escribir(f"⚠️ Se ha ejecutado el comando pero se ha alcanzado el límite de auto-corrección automática.\n{o}"))
                         
     except Exception as e:
         app.after(0, lambda err=str(e): escribir(f"\n[Error de conexión o API: {err}]"))
