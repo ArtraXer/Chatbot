@@ -764,7 +764,7 @@ def responder(auto_mensaje=None):
     else:
         escribir(f"🤖 Ejecución automática:\n{mensaje}")
         
-    escribir("🤖 Agente:\n", end="")
+    escribir("🤖 Agente: ⏳ Iniciando modelo (puede tardar unos segundos)...\n", end="")
     chat.mark_set("inicio_respuesta", "end-1c")
     chat.mark_gravity("inicio_respuesta", "left")
     idx_inicio_respuesta = "inicio_respuesta"
@@ -851,7 +851,13 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
                         app.after(0, lambda o=output_texto: escribir(f"⚠️ Se ha ejecutado el comando pero se ha alcanzado el límite de auto-corrección automática.\n{o}"))
                         
     except Exception as e:
-        app.after(0, lambda err=str(e): escribir(f"\n[Error de conexión o API: {err}]"))
+        import traceback
+        err_details = traceback.format_exc()
+        try:
+            with open(os.path.join(get_directorio_base(), "_error_log.txt"), "a", encoding="utf-8") as f:
+                f.write(f"\n--- ERROR ---\nModelo: {modelo}\nError: {err_details}\n")
+        except: pass
+        app.after(0, lambda err=str(e), details=err_details: escribir(f"\n[Error de conexión o API: {err}]\n{details}"))
 
 entrada.bind("<Return>", lambda e: responder())
 entrada.focus()

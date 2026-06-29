@@ -84,9 +84,9 @@ INSTRUCCIONES EXTRA DEL USUARIO:
     respuesta = client.chat.completions.create(
         model=modelo,
         messages=memoria,
-        max_tokens=4096,
+        max_tokens=1024,
         stream=True
-    )
+    ) 
 
     texto_completo = ""
 
