@@ -633,13 +633,8 @@ chat.tag_config("normal", foreground="white")
 zona = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=12)
 zona.pack(fill="x", padx=12, pady=(8, 12))
 
-modelos = [
-    "meta/llama-3.1-8b-instruct",
-    "meta/llama-3.1-70b-instruct",
-    "meta/llama-3.1-405b-instruct",
-    "mistralai/mistral-large",
-    "nvidia/nemotron-4-340b-instruct"
-]
+from modelos import MODELOS_GRATIS
+modelos = MODELOS_GRATIS
 
 # Fila selector + cancelar
 fila_top = ctk.CTkFrame(zona, fg_color="transparent")

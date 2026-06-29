@@ -84,7 +84,7 @@ INSTRUCCIONES EXTRA DEL USUARIO:
     respuesta = client.chat.completions.create(
         model=modelo,
         messages=memoria,
-        max_tokens=8000,
+        max_tokens=4096,
         stream=True
     )
 
@@ -92,7 +92,7 @@ INSTRUCCIONES EXTRA DEL USUARIO:
 
     for chunk in respuesta:
         if check_cancel and check_cancel():
-            texto_completo += "\n[Generación Cancelada]"
+            texto_completo += "\n[Generación cancelada]"
             break
         
         if chunk.choices and len(chunk.choices) > 0 and chunk.choices[0].delta.content is not None:
