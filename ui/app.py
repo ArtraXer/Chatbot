@@ -3,12 +3,15 @@ import threading
 import os
 import re
 import shutil
+import time
 import tkinter as tk
 
 from tkinter import filedialog, simpledialog, messagebox
-from agente import pensar, limpiar_memoria, get_memoria_size, set_instrucciones
+from agente import pensar, set_instrucciones
 from herramientas import listar_archivos, set_directorio_base, get_directorio_base, escribir_archivo
 from iconos import obtener_icono
+from ui.tree_utils import listar_nodos_arbol
+from ui.folder_picker import show_folder_picker
 from core.state import (
     append_conversation,
     append_task,
@@ -32,7 +35,7 @@ SETTINGS = load_settings()
 def save_ui_state():
     SETTINGS["open_files"] = list(editores_abiertos.keys())
     SETTINGS["workdir"] = get_directorio_base()
-    SETTINGS["model"] = selector_modelo.get() if "selector_modelo" in globals() else SETTINGS.get("model")
+    SETTINGS["model"] = selected_model_var.get()
     save_settings(SETTINGS)
 
 
@@ -42,9 +45,18 @@ def cargar_estado_ui():
         set_directorio_base(workdir)
         titulo_archivos.configure(text=os.path.basename(workdir))
 
-    for ruta in SETTINGS.get("open_files", []):
-        if os.path.isfile(ruta):
-            abrir_editor(ruta, os.path.basename(ruta))
+    rutas = [ruta for ruta in SETTINGS.get("open_files", []) if os.path.isfile(ruta)]
+    if not rutas:
+        return
+
+    def abrir_siguiente(ind=0):
+        if ind >= len(rutas):
+            return
+        ruta = rutas[ind]
+        abrir_editor(ruta, os.path.basename(ruta))
+        app.after(80, lambda: abrir_siguiente(ind + 1))
+
+    app.after(150, lambda: abrir_siguiente(0))
 
 
 app = ctk.CTk()
@@ -61,55 +73,233 @@ main_frame.pack(fill="both", expand=True)
 
 # -------- PANEL IZQUIERDO: BARRA LATERAL --------
 sidebar = ctk.CTkScrollableFrame(
-    main_frame, 
-    width=260, 
-    corner_radius=15,
+    main_frame,
+    width=320,
+    corner_radius=20,
+    fg_color="#131b28",
     scrollbar_button_color="#2f3640",
-    scrollbar_button_hover_color="#718093"
+    scrollbar_button_hover_color="#718093",
+    border_width=0,
 )
-sidebar.pack(side="left", fill="y", padx=(20, 0), pady=20)
+sidebar.pack(side="left", fill="y", padx=(18, 0), pady=18)
 
-# Cabecera Lateral
-header_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-header_frame.pack(fill="x", pady=(0, 10))
+workspace_card = ctk.CTkFrame(sidebar, fg_color="#191f2f", corner_radius=20, border_width=1, border_color="#2f3640")
+workspace_card.pack(fill="x", padx=14, pady=(14, 8))
 
-btn_directorio = ctk.CTkButton(
-    header_frame, 
-    text="📂 Cambiar Workspace", 
-    command=lambda: cambiar_directorio(), 
-    fg_color="#27ae60", 
-    hover_color="#2ecc71",
-    height=30
-)
-btn_directorio.pack(pady=(10, 10), fill="x")
+header_top = ctk.CTkFrame(workspace_card, fg_color="transparent")
+header_top.pack(fill="x", padx=16, pady=(16, 6))
+
+ctk.CTkLabel(
+    header_top,
+    text="WORKSPACE",
+    font=("Inter", 11, "bold"),
+    text_color="#7f8fa6"
+).pack(side="left")
+
+ctk.CTkLabel(
+    header_top,
+    text="●",
+    font=("Inter", 12, "bold"),
+    text_color="#2ecc71"
+).pack(side="right")
 
 titulo_archivos = ctk.CTkLabel(
-    header_frame, 
-    text=os.path.basename(get_directorio_base()), 
-    font=("Arial", 16, "bold"),
-    text_color="#fbc531"
+    workspace_card,
+    text=os.path.basename(get_directorio_base()),
+    font=("Inter", 20, "bold"),
+    text_color="#f5f6fa"
 )
-titulo_archivos.pack(pady=(0, 5))
+titulo_archivos.pack(anchor="w", padx=16)
 
-# Separador
-separador = ctk.CTkFrame(sidebar, height=2, fg_color="#353b48")
-separador.pack(fill="x", pady=(0, 10))
+ruta_workspace = ctk.CTkLabel(
+    workspace_card,
+    text=get_directorio_base(),
+    font=("Inter", 10),
+    text_color="#95a5a6",
+    wraplength=280,
+    justify="left"
+)
+ruta_workspace.pack(anchor="w", padx=16, pady=(4, 0))
 
-frame_lista_archivos = ctk.CTkFrame(sidebar, fg_color="transparent")
-frame_lista_archivos.pack(fill="both", expand=True)
+botones_workspace = ctk.CTkFrame(workspace_card, fg_color="transparent")
+botones_workspace.pack(fill="x", padx=16, pady=(16, 16))
+
+btn_directorio = ctk.CTkButton(
+    botones_workspace,
+    text="Cambiar",
+    command=lambda: cambiar_directorio(),
+    fg_color="#2f3640",
+    hover_color="#3d4d6b",
+    height=36,
+    corner_radius=14,
+    font=("Inter", 11, "bold")
+)
+btn_directorio.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+btn_refresh = ctk.CTkButton(
+    botones_workspace,
+    text="Refrescar",
+    command=lambda: actualizar_arbol_archivos(forzar=True),
+    fg_color="#2f3640",
+    hover_color="#3d4d6b",
+    height=36,
+    corner_radius=14,
+    font=("Inter", 11, "bold")
+)
+btn_refresh.pack(side="left", fill="x", expand=True)
+
+search_var = tk.StringVar(value="")
+search_entry = ctk.CTkEntry(
+    sidebar,
+    textvariable=search_var,
+    placeholder_text="Buscar...",
+    width=280,
+    corner_radius=16,
+    fg_color="#171f2f",
+    text_color="#f5f6fa",
+    placeholder_text_color="#7f8fa6",
+    border_width=1,
+    border_color="#2f3640",
+    font=("Inter", 12),
+    height=36,
+)
+search_entry.pack(fill="x", padx=14, pady=(0, 12))
+
+frame_lista_archivos = ctk.CTkFrame(sidebar, fg_color="#151d2d", corner_radius=18)
+frame_lista_archivos.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+
+explorer_header = ctk.CTkFrame(frame_lista_archivos, fg_color="transparent")
+explorer_header.pack(fill="x", padx=16, pady=(16, 0))
+
+ctk.CTkLabel(
+    explorer_header,
+    text="EXPLORER",
+    font=("Inter", 11, "bold"),
+    text_color="#7f8fa6"
+).pack(side="left")
+
+count_label = ctk.CTkLabel(
+    explorer_header,
+    text="",
+    font=("Inter", 11),
+    text_color="#95a5a6"
+)
+count_label.pack(side="right")
+
+ctk.CTkFrame(frame_lista_archivos, height=1, fg_color="#2f3640").pack(fill="x", padx=16, pady=(8, 10))
+
+tree_content = ctk.CTkFrame(frame_lista_archivos, fg_color="transparent")
+tree_content.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+tree_content.columnconfigure(0, weight=1)
 
 # Estado de carpetas expandidas (persistente entre recargas del árbol)
 carpetas_expandidas = set()
+ultima_interaccion_arbol = 0.0
+search_filter = ""
+
+def aplicar_filtro_arbol(event=None):
+    global search_filter
+    search_filter = search_var.get().strip().lower()
+    actualizar_arbol_archivos(forzar=True)
+
+search_entry.bind("<KeyRelease>", aplicar_filtro_arbol)
 
 # -------- FUNCIÓN CAMBIAR DIRECTORIO --------
 def cambiar_directorio():
-    ruta = filedialog.askdirectory(title="Seleccionar carpeta de trabajo")
-    if ruta:
+    ventana = ctk.CTkToplevel(app)
+    ventana.title("Cambiar workspace")
+    ventana.geometry("560x220")
+    ventana.minsize(520, 220)
+    ventana.transient(app)
+    ventana.grab_set()
+    ventana.configure(fg_color="#151d2d")
+
+    ctk.CTkLabel(
+        ventana,
+        text="Selecciona la carpeta de trabajo",
+        font=("Inter", 16, "bold"),
+        text_color="#f5f6fa"
+    ).pack(anchor="w", padx=24, pady=(20, 6))
+
+    ctk.CTkLabel(
+        ventana,
+        text="Elige una carpeta existente para usarla como workspace del agente.",
+        font=("Inter", 11),
+        text_color="#95a5a6"
+    ).pack(anchor="w", padx=24, pady=(0, 14))
+
+    ruta_var = tk.StringVar(value=get_directorio_base())
+    frame_ruta = ctk.CTkFrame(ventana, fg_color="#1c2537", corner_radius=14)
+    frame_ruta.pack(fill="x", padx=24, pady=(0, 12))
+
+    entrada_ruta = ctk.CTkEntry(
+        frame_ruta,
+        textvariable=ruta_var,
+        fg_color="#121826",
+        border_color="#2f3640",
+        text_color="#f5f6fa",
+        font=("Inter", 12),
+        height=38,
+    )
+    entrada_ruta.pack(side="left", fill="x", expand=True, padx=(10, 8), pady=10)
+
+    def seleccionar_ruta():
+        ruta = show_folder_picker(ventana, initialdir=ruta_var.get() or get_directorio_base())
+        if ruta:
+            ruta_var.set(ruta)
+
+    ctk.CTkButton(
+        frame_ruta,
+        text="Explorar",
+        width=90,
+        height=38,
+        command=seleccionar_ruta,
+        fg_color="#2f3640",
+        hover_color="#3d4d6b",
+        corner_radius=12,
+    ).pack(side="right", padx=(0, 10), pady=10)
+
+    botones = ctk.CTkFrame(ventana, fg_color="transparent")
+    botones.pack(fill="x", padx=24, pady=(8, 20))
+
+    def confirmar():
+        ruta = ruta_var.get().strip()
+        if not ruta or not os.path.isdir(ruta):
+            messagebox.showerror("Ruta inválida", "La ruta seleccionada no es una carpeta válida.")
+            return
         set_directorio_base(ruta)
         nombre_carpeta = os.path.basename(ruta)
         titulo_archivos.configure(text=nombre_carpeta)
+        ruta_workspace.configure(text=ruta)
         actualizar_arbol_archivos(forzar=True)
         save_ui_state()
+        ventana.destroy()
+
+    ctk.CTkButton(
+        botones,
+        text="Cancelar",
+        width=110,
+        height=38,
+        command=ventana.destroy,
+        fg_color="#2f3640",
+        hover_color="#3d4d6b",
+        corner_radius=12,
+    ).pack(side="right", padx=(8, 0))
+
+    ctk.CTkButton(
+        botones,
+        text="Aceptar",
+        width=110,
+        height=38,
+        command=confirmar,
+        fg_color="#2980b9",
+        hover_color="#3498db",
+        corner_radius=12,
+    ).pack(side="right")
+
+    ventana.bind("<Return>", lambda _event: confirmar())
+    ventana.bind("<Escape>", lambda _event: ventana.destroy())
 
 # -------- MENÚ CONTEXTUAL CUSTOMTKINTER --------
 class MenuContextualCustom(ctk.CTkToplevel):
@@ -341,7 +531,11 @@ def aplicar_sintaxis(caja, texto):
     # Aplicar regex básico (requeriría un loop complejo, para simplificar lo hacemos en pasadas)
     caja.delete("0.0", "end")
     caja.insert("0.0", texto)
-    
+
+    # Evitamos colorear archivos muy grandes en el inicio para no bloquear la UI.
+    if len(texto) > 20000:
+        return
+
     keywords = ["and", "as", "assert", "break", "class", "continue", "def", "del", "elif", "else", "except", "False", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "None", "nonlocal", "not", "or", "pass", "raise", "return", "True", "try", "while", "with", "yield"]
     
     # Implementación ultra básica para no bloquear la UI:
@@ -394,25 +588,63 @@ def abrir_editor(ruta_absoluta, nombre):
     scrollbar.pack(side="right", fill="y", pady=0)
 
     def sync_scroll(*args):
-        line_numbers.yview_moveto(args[0])
-        texto_editor.yview_moveto(args[0])
-        scrollbar.set(*args)
+        if not args:
+            return
+
+        if args[0] == "moveto" and len(args) > 1:
+            fraction = args[1]
+            line_numbers.yview_moveto(fraction)
+            texto_editor.yview_moveto(fraction)
+            return
+
+        if args[0] == "scroll" and len(args) > 2:
+            try:
+                count = int(args[1])
+            except ValueError:
+                return
+            unit = args[2]
+            line_numbers.yview_scroll(count, unit)
+            texto_editor.yview_scroll(count, unit)
+            return
+
+        if len(args) == 2:
+            line_numbers.yview_moveto(args[0])
+            texto_editor.yview_moveto(args[0])
+            scrollbar.set(args[0], args[1])
+            return
+
+    def on_editor_mousewheel(event):
+        if event.num == 4 or getattr(event, 'delta', 0) > 0:
+            texto_editor.yview_scroll(-1, "units")
+        else:
+            texto_editor.yview_scroll(1, "units")
+        line_numbers.yview_moveto(texto_editor.yview()[0])
+        return "break"
 
     texto_editor.configure(yscrollcommand=lambda *args: sync_scroll(*args))
-    line_numbers.configure(yscrollcommand=lambda *args: sync_scroll(*args))
+    line_numbers.configure(yscrollcommand=lambda *args: scrollbar.set(*args))
     scrollbar.configure(command=sync_scroll)
+
+    texto_editor.bind("<MouseWheel>", on_editor_mousewheel)
+    texto_editor.bind("<Button-4>", on_editor_mousewheel)
+    texto_editor.bind("<Button-5>", on_editor_mousewheel)
 
     def actualizar_numeros_de_linea(event=None):
         contenido_actual = texto_editor.get("0.0", "end-1c")
         line_count = max(contenido_actual.count("\n") + 1, 1)
         numeros = "\n".join(str(i) for i in range(1, line_count + 1))
+        yview = line_numbers.yview()
         line_numbers.configure(state="normal")
         line_numbers.delete("0.0", "end")
         line_numbers.insert("0.0", numeros)
         line_numbers.configure(state="disabled")
+        if yview:
+            try:
+                line_numbers.yview_moveto(yview[0])
+            except Exception:
+                pass
 
     texto_editor.bind("<KeyRelease>", actualizar_numeros_de_linea)
-    texto_editor.bind("<MouseWheel>", actualizar_numeros_de_linea)
     texto_editor.bind("<ButtonRelease-1>", actualizar_numeros_de_linea)
 
     aplicar_sintaxis(texto_editor, contenido)
@@ -477,94 +709,163 @@ class ClickManager:
 
 
 def toggle_frame(frame, btn, ruta_carpeta):
+    global ultima_interaccion_arbol
+    ultima_interaccion_arbol = time.time()
     if frame.winfo_ismapped():
         frame.pack_forget()
         btn.configure(text=btn.cget("text").replace("📂", "📁"))
         carpetas_expandidas.discard(ruta_carpeta)
     else:
-        frame.pack(fill="x", padx=(0, 0), pady=0)
+        if not getattr(frame, "loaded", False):
+            construir_arbol(frame, ruta_carpeta)
+            frame.loaded = True
+        frame.pack(fill="x", padx=(16, 0), pady=(0, 4))
         btn.configure(text=btn.cget("text").replace("📁", "📂"))
         carpetas_expandidas.add(ruta_carpeta)
 
 def construir_arbol(contenedor, ruta_base):
     try:
-        elementos = os.listdir(ruta_base)
-    except:
-        return
-        
-    elementos.sort()
-    carpetas = [e for e in elementos if os.path.isdir(os.path.join(ruta_base, e))]
-    archivos = [e for e in elementos if os.path.isfile(os.path.join(ruta_base, e))]
-    
-    for c in carpetas:
-        if c.startswith("."): continue
-        ruta_c = os.path.join(ruta_base, c)
-        
-        node_frame = ctk.CTkFrame(contenedor, fg_color="transparent")
-        node_frame.pack(fill="x")
-        
-        btn = ctk.CTkButton(
-            node_frame, text=f"📁 {c}", anchor="w", fg_color="transparent", 
-            hover_color="#2f3640", text_color="#fbc531", font=("Arial", 14, "bold")
-        )
-        btn.pack(fill="x", pady=1)
-        
-        # Clic derecho en carpeta
-        btn.bind("<Button-3>", lambda e, r=ruta_c, n=c: mostrar_menu_carpeta(e, r, n))
-        
-        sub_frame_wrapper = ctk.CTkFrame(node_frame, fg_color="transparent")
-        borde_izq = ctk.CTkFrame(sub_frame_wrapper, width=2, fg_color="#353b48")
-        borde_izq.pack(side="left", fill="y", padx=(12, 10))
-        sub_frame = ctk.CTkFrame(sub_frame_wrapper, fg_color="transparent")
-        sub_frame.pack(side="left", fill="both", expand=True)
-        
-        btn.configure(command=lambda f=sub_frame_wrapper, b=btn, r=ruta_c: toggle_frame(f, b, r))
-        construir_arbol(sub_frame, ruta_c)
-        
-        # Si la carpeta estaba expandida antes de la recarga, abrirla
-        if ruta_c in carpetas_expandidas:
-            sub_frame_wrapper.pack(fill="x", padx=(0, 0), pady=0)
-            btn.configure(text=f"📂 {c}")
+        nodos = listar_nodos_arbol(ruta_base, filtro=search_filter, max_items=500)
+    except Exception:
+        return 0
 
-    for a in archivos:
-        if a.startswith("."): continue
-        icono, color = obtener_icono(a)
-        ruta_a = os.path.join(ruta_base, a)
-        
-        manager = ClickManager(ruta_a, a)
-        btn_archivo = ctk.CTkButton(
-            contenedor, text=f"{icono} {a}", anchor="w", fg_color="transparent",
-            hover_color="#2f3640", text_color=color, font=("Arial", 13),
-            command=manager.click
-        )
-        btn_archivo.pack(fill="x", pady=1)
-        
-        # Clic derecho en archivo
-        btn_archivo.bind("<Button-3>", lambda e, r=ruta_a, n=a: mostrar_menu_archivo(e, r, n))
+    total = 0
+
+    def renderizar_nodo(nodo, parent_widget, nivel=0):
+        nonlocal total
+        if nodo["type"] == "dir":
+            total += 1
+            ruta_c = nodo["path"]
+            try:
+                items = [n for n in os.listdir(ruta_c) if not n.startswith('.')]
+                n_files = sum(1 for n in items if os.path.isfile(os.path.join(ruta_c, n)))
+                n_dirs = sum(1 for n in items if os.path.isdir(os.path.join(ruta_c, n)))
+            except Exception:
+                n_files = n_dirs = 0
+
+            node_frame = ctk.CTkFrame(parent_widget, fg_color="transparent")
+            node_frame.pack(fill="x")
+
+            header_frame = ctk.CTkFrame(node_frame, fg_color="#141821")
+            header_frame.pack(fill="x", pady=1)
+
+            badge = ctk.CTkLabel(
+                header_frame,
+                text="📁",
+                width=30,
+                height=30,
+                fg_color="#f1c40f",
+                text_color="#1b1b1b",
+                corner_radius=8,
+                font=("Arial", 12, "bold")
+            )
+            badge.pack(side="left", padx=(6 + nivel * 10, 10), pady=3)
+
+            display_name = f"{nodo['name']}  —  {n_dirs} dirs, {n_files} files"
+            sub_frame = ctk.CTkFrame(node_frame, fg_color="transparent")
+            sub_frame.loaded = False
+
+            btn = ctk.CTkButton(
+                header_frame,
+                text=display_name,
+                anchor="w",
+                fg_color="transparent",
+                hover_color="#232a39",
+                text_color="#fbc531",
+                font=("Arial", 13, "bold"),
+                corner_radius=0,
+            )
+            btn.configure(command=lambda f=sub_frame, b=btn, r=ruta_c: toggle_frame(f, b, r))
+            btn.pack(side="left", fill="x", expand=True, pady=3, padx=(0, 6))
+
+            badge.bind("<Button-3>", lambda e, r=ruta_c, n=nodo["name"]: mostrar_menu_carpeta(e, r, n))
+            btn.bind("<Button-3>", lambda e, r=ruta_c, n=nodo["name"]: mostrar_menu_carpeta(e, r, n))
+
+            if ruta_c in carpetas_expandidas:
+                child_container = ctk.CTkFrame(sub_frame, fg_color="transparent")
+                child_container.pack(fill="x", padx=(10 + nivel * 10, 0), pady=(0, 2))
+                for child in nodo.get("children", []):
+                    renderizar_nodo(child, child_container, nivel + 1)
+                sub_frame.loaded = True
+                sub_frame.pack(fill="x", padx=(0, 0), pady=0)
+                badge.configure(text="📂")
+
+        else:
+            total += 1
+            ruta_a = nodo["path"]
+            icono, color = obtener_icono(nodo["name"])
+            manager = ClickManager(ruta_a, nodo["name"])
+            item_frame = ctk.CTkFrame(parent_widget, fg_color="#141821")
+            item_frame.pack(fill="x", pady=1)
+
+            badge = ctk.CTkLabel(
+                item_frame,
+                text=icono,
+                width=30,
+                height=30,
+                fg_color=color,
+                text_color="white",
+                corner_radius=8,
+                font=("Arial", 12, "bold")
+            )
+            badge.pack(side="left", padx=(6 + nivel * 10, 10), pady=3)
+
+            btn_archivo = ctk.CTkButton(
+                item_frame,
+                text=nodo["name"],
+                anchor="w",
+                fg_color="transparent",
+                hover_color="#232a39",
+                text_color="#dcdde1",
+                font=("Arial", 13),
+                corner_radius=0,
+                command=manager.click
+            )
+            btn_archivo.pack(side="left", fill="x", expand=True, pady=3, padx=(0, 6))
+
+            badge.bind("<Button-1>", lambda e, m=manager: m.click())
+            badge.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
+            btn_archivo.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
+
+    for nodo in nodos:
+        renderizar_nodo(nodo, contenedor)
+
+    return total
 
 def _get_tree_hash(base):
     """Genera una representación rápida del estado actual del directorio."""
     resultado = []
     if not os.path.exists(base):
         return ""
+
     for ruta, carpetas, ficheros in os.walk(base):
+        rel_dir = os.path.relpath(ruta, base)
+        if rel_dir == ".":
+            rel_dir = ""
         carpetas[:] = sorted([c for c in carpetas if not c.startswith(".")])
+        ficheros = sorted([f for f in ficheros if not f.startswith(".")])
+
         for c in carpetas:
-            resultado.append(f"D:{os.path.join(ruta, c)}")
-        for f in sorted(ficheros):
-            if not f.startswith("."):
-                ruta_f = os.path.join(ruta, f)
-                try:
-                    mtime = os.path.getmtime(ruta_f)
-                except:
-                    mtime = 0
-                resultado.append(f"F:{ruta_f}:{mtime}")
+            ruta_rel = os.path.join(rel_dir, c) if rel_dir else c
+            resultado.append(f"D:{ruta_rel}")
+
+        for f in ficheros:
+            ruta_rel = os.path.join(rel_dir, f) if rel_dir else f
+            try:
+                stat = os.stat(os.path.join(ruta, f))
+                resultado.append(f"F:{ruta_rel}:{stat.st_size}:{int(stat.st_mtime)}")
+            except Exception:
+                resultado.append(f"F:{ruta_rel}:error")
+
     return "\n".join(resultado)
 
 _ultimo_tree_hash = ""
 
 def actualizar_arbol_archivos(forzar=False):
     global _ultimo_tree_hash
+    
+    if not forzar and time.time() - ultima_interaccion_arbol < 0.5:
+        return
     
     base = get_directorio_base()
     
@@ -582,14 +883,17 @@ def actualizar_arbol_archivos(forzar=False):
     except:
         scroll_pos = 0.0
     
-    # Estrategia Anti-Parpadeo: Añadir los nuevos al final y luego borrar los viejos de arriba
-    widgets_antiguos = list(frame_lista_archivos.winfo_children())
+    widgets_antiguos = list(tree_content.winfo_children())
     
     if not os.path.exists(base) or not os.listdir(base):
-        ctk.CTkLabel(frame_lista_archivos, text="Directorio vacío", text_color="gray").pack()
+        ctk.CTkLabel(tree_content, text="Directorio vacío", text_color="gray").pack(pady=18)
+        count_label.configure(text="0 elementos")
     else:
-        construir_arbol(frame_lista_archivos, base)
-        
+        total = construir_arbol(tree_content, base)
+        if total == 0:
+            ctk.CTkLabel(tree_content, text="No hay coincidencias.", text_color="gray").pack(pady=18)
+        count_label.configure(text=f"{total} elementos")
+    
     for w in widgets_antiguos:
         w.destroy()
     
@@ -658,47 +962,6 @@ btn_ajustes = ctk.CTkButton(
 )
 btn_ajustes.pack(side="left", padx=(0, 6))
 
-btn_limpiar_icono = ctk.CTkButton(
-    botones_header, text="🗑️", width=34, height=34,
-    fg_color="#3d1f2a", hover_color="#6b2737",
-    corner_radius=8, font=("Arial", 14), command=lambda: limpiar_memoria_ui()
-)
-btn_limpiar_icono.pack(side="left")
-
-# -------- BARRA DE MEMORIA --------
-mem_bar_frame = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=10)
-mem_bar_frame.pack(fill="x", padx=12, pady=(6, 0))
-
-mem_row = ctk.CTkFrame(mem_bar_frame, fg_color="transparent")
-mem_row.pack(fill="x", padx=10, pady=(6, 2))
-ctk.CTkLabel(mem_row, text="Memoria del contexto:", font=("Inter", 11), text_color="#8892b0").pack(side="left")
-lbl_tokens = ctk.CTkLabel(mem_row, text="0 / 8000 tokens", font=("Inter", 10), text_color="#636b8c")
-lbl_tokens.pack(side="right")
-
-barra_memoria = ctk.CTkProgressBar(mem_bar_frame, height=6, corner_radius=3)
-barra_memoria.pack(fill="x", padx=10, pady=(0, 8))
-barra_memoria.set(0)
-
-def actualizar_medidor_memoria():
-    tokens = get_memoria_size()
-    max_tokens = 8000
-    progreso = min(tokens / max_tokens, 1.0)
-    barra_memoria.set(progreso)
-    lbl_tokens.configure(text=f"{tokens} / {max_tokens} tokens")
-    
-    if progreso > 0.8:
-        barra_memoria.configure(progress_color="#e74c3c")
-    elif progreso > 0.5:
-        barra_memoria.configure(progress_color="#f1c40f")
-    else:
-        barra_memoria.configure(progress_color="#2ecc71")
-
-def limpiar_memoria_ui():
-    limpiar_memoria()
-    chat.delete("0.0", "end")
-    actualizar_medidor_memoria()
-    escribir("🧠 Memoria borrada. Nuevo chat iniciado.\n")
-
 # -------- PANEL DE TAREAS Y TRAZABILIDAD --------
 tasks_frame = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=10)
 tasks_frame.pack(fill="x", padx=12, pady=(8, 0))
@@ -742,19 +1005,121 @@ zona.pack(fill="x", padx=12, pady=(8, 12))
 
 from modelos import MODELOS_GRATIS
 modelos = MODELOS_GRATIS
+selected_model_var = tk.StringVar(value=SETTINGS.get("model", modelos[0]))
+_modelo_popup = None
+
+class ModeloPopup(ctk.CTkToplevel):
+    def __init__(self, parent, opciones, on_select, x, y):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.on_select = on_select
+        self.parent = parent
+
+        ancho = 240
+        alto_max = 260
+        alto = min(alto_max, 12 + len(opciones) * 28 + 12)
+        alto = max(alto, 110)
+
+        pantalla_alto = parent.winfo_screenheight()
+        if y + alto > pantalla_alto - 20:
+            y = max(10, y - alto - 8)
+
+        self.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        self.frame = ctk.CTkFrame(self, fg_color="#171b2d", corner_radius=8, border_width=1, border_color="#2f3655")
+        self.frame.pack(fill="both", expand=True, padx=1, pady=1)
+
+        self.canvas = tk.Canvas(self.frame, bg="#171b2d", highlightthickness=0, height=alto - 12)
+        self.canvas.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+
+        self.scrollbar = ctk.CTkScrollbar(self.frame, orientation="vertical", command=self.canvas.yview, height=alto - 12)
+        self.scrollbar.pack(side="right", fill="y", padx=(0, 6), pady=6)
+
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.inner = ctk.CTkFrame(self.canvas, fg_color="transparent")
+        self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+
+        for opcion in opciones:
+            btn = ctk.CTkButton(
+                self.inner,
+                text=opcion,
+                fg_color="transparent",
+                hover_color="#24304e",
+                text_color="#f1f5f9",
+                anchor="w",
+                corner_radius=6,
+                height=24,
+                border_width=0,
+                font=("Inter", 12),
+                command=lambda m=opcion: self._seleccionar(m)
+            )
+            btn.pack(fill="x", padx=4, pady=2)
+
+        self.inner.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+
+        self.parent.bind_all("<Button-1>", self._cerrar_si_fuera, add="+")
+        self.parent.bind_all("<Escape>", lambda e: self._cerrar())
+        self.focus_force()
+
+    def _seleccionar(self, modelo):
+        self.on_select(modelo)
+        self._cerrar()
+
+    def _cerrar_si_fuera(self, event):
+        if event.widget.winfo_toplevel() != self:
+            self._cerrar()
+
+    def _cerrar(self):
+        try:
+            self.parent.unbind_all("<Button-1>")
+        except Exception:
+            pass
+        self.destroy()
+
+
+def actualizar_selector_modelo():
+    selector_modelo.configure(text=f"{selected_model_var.get()}  ▼")
+
+
+def seleccionar_modelo(modelo):
+    selected_model_var.set(modelo)
+    SETTINGS["model"] = modelo
+    save_settings(SETTINGS)
+    actualizar_selector_modelo()
+
+
+def abrir_selector_modelo(event=None):
+    global _modelo_popup
+    if _modelo_popup is not None:
+        _modelo_popup._cerrar()
+        _modelo_popup = None
+        return
+
+    x = selector_modelo.winfo_rootx()
+    y = selector_modelo.winfo_rooty() + selector_modelo.winfo_height()
+    _modelo_popup = ModeloPopup(app, modelos, seleccionar_modelo, x, y)
+
 
 # Fila selector + cancelar
 fila_top = ctk.CTkFrame(zona, fg_color="transparent")
 fila_top.pack(fill="x", padx=8, pady=(8, 4))
 
-selector_modelo = ctk.CTkOptionMenu(
-    fila_top, values=modelos, width=230, height=32,
+selector_modelo = ctk.CTkButton(
+    fila_top,
+    text=f"{selected_model_var.get()}  ▼",
+    width=230,
+    height=32,
+    fg_color="#2f3655",
+    hover_color="#3d4775",
+    corner_radius=8,
     font=("Inter", 12),
-    fg_color="#2f3655", button_color="#3d4775", button_hover_color="#4a5590",
-    dropdown_fg_color="#22253a", dropdown_hover_color="#2f3655"
+    command=abrir_selector_modelo
 )
 selector_modelo.pack(side="left")
-selector_modelo.set(SETTINGS.get("model", modelos[0]))
+
 
 def btn_cancelar_accion():
     global cancelar_generacion
@@ -1036,7 +1401,7 @@ def responder(auto_mensaje=None):
     chat.mark_gravity("inicio_respuesta", "left")
     idx_inicio_respuesta = "inicio_respuesta"
 
-    modelo_seleccionado = selector_modelo.get()
+    modelo_seleccionado = selected_model_var.get()
     
     def confirmacion_ui_segura(nombre, codigo):
         resultado = [False]
@@ -1118,7 +1483,6 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura, modo_program
             else:
                 app.after(0, lambda: chat.insert("end", "\n\n"))
                 app.after(0, actualizar_arbol_archivos)
-                app.after(0, actualizar_medidor_memoria)
                 app.after(0, actualizar_panel_tareas)
                 append_conversation({"role": "assistant", "content": texto_acumulado})
                 append_task("respuesta", f"Respuesta procesada para: {mensaje[:80]}")
@@ -1177,9 +1541,26 @@ def cargar_historial_ui():
         else:
             escribir(f"🤖 Agente:\n{contenido}")
 
-cargar_estado_ui()
-cargar_historial_ui()
-actualizar_panel_tareas()
+
+def mostrar_estado_carga_arbol():
+    if hasattr(tree_content, "winfo_children"):
+        for w in tree_content.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            tree_content,
+            text="Cargando árbol de archivos...",
+            text_color="gray",
+            font=("Arial", 12)
+        ).pack(pady=12)
+
+
+def iniciar_carga_inicial():
+    cargar_estado_ui()
+    cargar_historial_ui()
+    actualizar_panel_tareas()
+    mostrar_estado_carga_arbol()
+    app.after(300, lambda: actualizar_arbol_archivos(forzar=True))
+    app.after(2000, vigilar_archivos)
 
 # -------- VIGILANTE DE ARCHIVOS (Auto-Sync cada 2s) --------
 def vigilar_archivos():
@@ -1189,7 +1570,5 @@ def vigilar_archivos():
         pass
     app.after(2000, vigilar_archivos)
 
-actualizar_arbol_archivos(forzar=True)
-actualizar_medidor_memoria()
-app.after(2000, vigilar_archivos)
+app.after_idle(iniciar_carga_inicial)
 app.mainloop()
