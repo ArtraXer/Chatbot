@@ -100,19 +100,37 @@ class WorkspaceService:
     def list_files(self) -> list[str]:
         files = []
         for path in self._base_dir.rglob("*"):
-            if path.is_file() and not any(part.startswith(".") for part in path.parts):
+            if path.is_file() and not any(part.startswith(".") or part in ("__pycache__", "venv", "env", "node_modules") for part in path.parts):
                 files.append(str(path.relative_to(self._base_dir)))
         return sorted(files)
 
     def tree(self) -> str:
         lines = ["/  (raíz del proyecto)"]
         for path in sorted(self._base_dir.rglob("*")):
-            if any(part.startswith(".") for part in path.parts):
+            if any(part.startswith(".") or part in ("__pycache__", "venv", "env", "node_modules") for part in path.parts):
                 continue
             level = len(path.relative_to(self._base_dir).parts) - 1
             indent = "  " * level
             lines.append(f"{indent}📁 {path.name}/" if path.is_dir() else f"{indent}📄 {path.name}")
         return "\n".join(lines)
+
+    def search_code(self, query: str) -> str:
+        import subprocess
+        try:
+            # Simple grep search ignoring common heavy folders
+            cmd = ["grep", "-rnI", "--exclude-dir={.git,__pycache__,venv,env,node_modules}", query, "."]
+            result = subprocess.run(cmd, cwd=self._base_dir, capture_output=True, text=True, timeout=5)
+            output = result.stdout.strip()
+            if not output:
+                return "No se encontraron coincidencias."
+            
+            # Limit results
+            lines = output.split("\n")
+            if len(lines) > 50:
+                return "\n".join(lines[:50]) + "\n... (resultados truncados)"
+            return output
+        except Exception as e:
+            return f"Error en búsqueda: {str(e)}"
 
 
 workspace_service = WorkspaceService()

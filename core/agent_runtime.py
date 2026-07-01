@@ -7,8 +7,6 @@ from datetime import datetime
 from threading import Lock
 from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
-from openai import APIConnectionError, APIError, OpenAI, RateLimitError
-
 from core.services import workspace_service
 
 logger = logging.getLogger(__name__)
@@ -19,22 +17,33 @@ class ConversacionMemoria:
     """Gestor robusto de memoria con límites."""
 
     mensajes: List[Dict] = field(default_factory=list)
-    max_mensajes: int = 20
-    max_tokens_estimados: int = 2000
+    max_mensajes: int = 100
+    max_tokens_estimados: int = 64000
     lock: Lock = field(default_factory=Lock)
 
-    def agregar_mensaje(self, rol: str, contenido: str) -> bool:
+    def _get_content_length(self, contenido) -> int:
+        if isinstance(contenido, str):
+            return len(contenido)
+        if isinstance(contenido, list):
+            return sum(len(c.get("text", "")) for c in contenido if c.get("type") == "text")
+        return 0
+
+    def agregar_mensaje(self, rol: str, contenido: Any) -> bool:
         with self.lock:
-            if not contenido or not isinstance(contenido, str):
+            if not contenido:
                 return False
-            contenido = contenido.strip()
-            if not contenido or rol not in {"user", "assistant", "system"}:
+            if isinstance(contenido, str):
+                contenido = contenido.strip()
+                if not contenido:
+                    return False
+            if rol not in {"user", "assistant", "system"}:
                 return False
 
-            tokens_nuevos = len(contenido) // 4
-            tokens_totales = sum(len(m.get("content", "")) // 4 for m in self.mensajes)
+            tokens_nuevos = self._get_content_length(contenido) // 4
+            tokens_totales = sum(self._get_content_length(m.get("content", "")) // 4 for m in self.mensajes)
             if tokens_totales + tokens_nuevos > self.max_tokens_estimados:
-                self.mensajes = self.mensajes[-5:] if len(self.mensajes) > 5 else self.mensajes
+                system_msg = [m for m in self.mensajes if m["role"] == "system"]
+                self.mensajes = system_msg + self.mensajes[-15:] if len(self.mensajes) > 15 else self.mensajes
 
             self.mensajes.append({"role": rol, "content": contenido, "timestamp": datetime.now().isoformat()})
             if len(self.mensajes) > self.max_mensajes:
@@ -51,7 +60,7 @@ class ConversacionMemoria:
 
     def get_size(self) -> int:
         with self.lock:
-            return sum(len(m.get("content", "")) // 4 for m in self.mensajes)
+            return sum(self._get_content_length(m.get("content", "")) // 4 for m in self.mensajes)
 
 
 _memoria = ConversacionMemoria()
@@ -59,9 +68,10 @@ instrucciones_extra = ""
 _cliente_openai = None
 
 
-def _init_cliente() -> OpenAI:
+def _init_cliente() -> Any:
     global _cliente_openai
     if _cliente_openai is None:
+        from openai import OpenAI
         _cliente_openai = OpenAI(
             base_url="https://integrate.api.nvidia.com/v1",
             api_key=os.environ.get("NVIDIA_API_KEY", ""),
@@ -93,6 +103,8 @@ def pensar(
 ) -> Generator[Tuple[str, bool, Any], None, None]:
     global _memoria, instrucciones_extra
 
+    from openai import APIConnectionError, APIError, RateLimitError
+
     if not mensaje or not isinstance(mensaje, str):
         yield "❌ Mensaje vacío", True, None
         return
@@ -119,17 +131,24 @@ Si solo describes lo que harías, NO se ejecutará absolutamente nada.
 CREAR CARPETA — escribe exactamente en una línea:
 CARPETA: nombre_carpeta
 
-CREAR O EDITAR ARCHIVO — escribe exactamente:
+CREAR ARCHIVO NUEVO — escribe exactamente:
 ARCHIVO: ruta/relativa/archivo.ext
 (contenido del archivo aquí, sin bloques ```markdown```)
 
-Ejemplo: para crear proyecto/index.html:
-ARCHIVO: proyecto/index.html
-<!DOCTYPE html>
-<html><body><h1>Hola</h1></body></html>
+MODIFICAR ARCHIVO EXISTENTE (PATCH) — escribe:
+REEMPLAZAR: ruta/archivo.py
+```SEARCH
+(código exacto que existe actualmente y quieres reemplazar)
+```
+```REPLACE
+(el nuevo código que debe ir en su lugar)
+```
 
 LEER ARCHIVO:
 COMANDO: leer ruta/archivo.py
+
+BUSCAR CÓDIGO (RAG):
+COMANDO: buscar_codigo <término a buscar>
 
 EJECUTAR COMANDO DEL SISTEMA:
 COMANDO: ejecutar git status
@@ -140,9 +159,9 @@ COMANDO: buscar_web consulta aquí
 ============================================================
 REGLAS OBLIGATORIAS:
 - SIEMPRE emite los comandos de arriba para realizar acciones reales.
-- NUNCA escribas "voy a crear..." o "he creado..." sin haber escrito el comando CARPETA: o ARCHIVO:.
+- Usa REEMPLAZAR para modificar archivos grandes, NO reescribas todo con ARCHIVO:. El bloque SEARCH debe ser una coincidencia EXACTA.
 - Si el usuario dice "dentro de proyecto", la ruta DEBE ser "proyecto/index.html", NO solo "index.html".
-- El código va DIRECTAMENTE después de ARCHIVO:, sin bloques ```markdown```.
+- El código va DIRECTAMENTE después de ARCHIVO:, sin bloques ```markdown``` extra.
 - Piensa dentro de <pensar>...</pensar> y luego emite el comando.
 - Cuando acabes, confirma brevemente y DETENTE.
 ============================================================
@@ -232,6 +251,37 @@ def _procesar_stream(respuesta, check_cancel, callback_confirmar, callback_termi
 def procesar_acciones(texto, callback_confirmar_archivo, callback_terminal):
     respuestas = []
     requiere_respuesta = False
+
+    # Parsear REEMPLAZAR
+    bloques_reemplazo = re.split(r"(?i)\*?\*?REEMPLAZAR:\*?\*?\s*", texto)
+    for bloque in bloques_reemplazo[1:]:
+        datos = bloque.split("\n", 1)
+        if len(datos) == 2:
+            nombre = datos[0].replace("`", "").replace("*", "").strip()
+            resto = datos[1]
+            match_search = re.search(r"```(?:SEARCH)?\n(.*?)\n```", resto, re.DOTALL)
+            match_replace = re.search(r"```(?:REPLACE)?\n(.*?)\n```", resto, re.DOTALL)
+            if match_search and match_replace:
+                viejo = match_search.group(1)
+                nuevo = match_replace.group(1)
+                
+                ruta_completa = workspace_service.resolve_path(nombre)
+                if ruta_completa.exists():
+                    contenido_actual = workspace_service.read_text(nombre)
+                    if viejo in contenido_actual:
+                        nuevo_contenido = contenido_actual.replace(viejo, nuevo, 1)
+                        if callback_confirmar_archivo:
+                            aceptado = callback_confirmar_archivo(f"PARCHE a {nombre}", f"- {viejo}\n+ {nuevo}")
+                            if aceptado:
+                                workspace_service.write_text(nombre, nuevo_contenido)
+                                respuestas.append(f"He parcheado exitosamente el archivo '{nombre}'")
+                        else:
+                            workspace_service.write_text(nombre, nuevo_contenido)
+                            respuestas.append(f"He parcheado exitosamente el archivo '{nombre}'")
+                    else:
+                        respuestas.append(f"❌ Error al parchear '{nombre}': El bloque SEARCH no se encontró exactamente en el archivo.")
+                else:
+                    respuestas.append(f"❌ Error al parchear '{nombre}': El archivo no existe.")
 
     bloques_archivos = re.split(r"(?i)\*?\*?ARCHIVO:\*?\*?\s*", texto)
     for bloque in bloques_archivos[1:]:

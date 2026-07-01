@@ -5,6 +5,7 @@ import re
 import shutil
 import time
 import tkinter as tk
+from datetime import datetime
 
 from tkinter import filedialog, simpledialog, messagebox
 from agente import pensar, set_instrucciones
@@ -21,6 +22,9 @@ from core.state import (
     load_settings,
     load_tasks,
     save_settings,
+    save_session,
+    load_sessions,
+    delete_session,
 )
 
 # Snapshot del árbol de archivos para detectar cambios
@@ -60,8 +64,8 @@ def cargar_estado_ui():
 
 
 app = ctk.CTk()
-app.title("Artraxer AI Agent Premium")
-app.geometry("1200x750")
+app.title("AI Agent")
+app.geometry("1920x1080")
 
 app.protocol("WM_DELETE_WINDOW", lambda: (save_ui_state(), app.destroy()))
 
@@ -148,6 +152,19 @@ btn_refresh = ctk.CTkButton(
 )
 btn_refresh.pack(side="left", fill="x", expand=True)
 
+btn_api_key = ctk.CTkButton(
+    botones_workspace,
+    text="🔑",
+    command=lambda: abrir_panel_api_keys(),
+    fg_color="#2f3640",
+    hover_color="#3d4d6b",
+    height=36,
+    width=44,
+    corner_radius=14,
+    font=("Inter", 14)
+)
+btn_api_key.pack(side="left", padx=(8, 0))
+
 search_var = tk.StringVar(value="")
 search_entry = ctk.CTkEntry(
     sidebar,
@@ -166,7 +183,93 @@ search_entry = ctk.CTkEntry(
 search_entry.pack(fill="x", padx=14, pady=(0, 12))
 
 frame_lista_archivos = ctk.CTkFrame(sidebar, fg_color="#151d2d", corner_radius=18)
-frame_lista_archivos.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+frame_lista_archivos.pack(fill="both", expand=True, padx=14, pady=(0, 8))
+
+# -------- PANEL HISTORIAL DE SESIONES --------
+historial_card = ctk.CTkFrame(sidebar, fg_color="#191f2f", corner_radius=18, border_width=1, border_color="#2f3640")
+historial_card.pack(fill="x", padx=14, pady=(0, 14))
+
+hist_header = ctk.CTkFrame(historial_card, fg_color="transparent")
+hist_header.pack(fill="x", padx=16, pady=(12, 4))
+
+ctk.CTkLabel(hist_header, text="HISTORIAL", font=("Inter", 11, "bold"), text_color="#7f8fa6").pack(side="left")
+
+_chat_messages_cache = []  # Lista de dicts {role, content} de la sesión actual
+
+def _actualizar_panel_historial():
+    for w in hist_list_frame.winfo_children():
+        w.destroy()
+    sesiones = load_sessions()
+    if not sesiones:
+        ctk.CTkLabel(hist_list_frame, text="Sin sesiones guardadas", font=("Inter", 11), text_color="#4a5568").pack(pady=8)
+        return
+    for ses in sesiones[:15]:
+        ses_id = ses.get("id", "")
+        ses_name = ses.get("name", "Sin nombre")
+        ses_time = ses.get("timestamp", "")[:16].replace("T", " ")
+
+        row = ctk.CTkFrame(hist_list_frame, fg_color="#131b28", corner_radius=10)
+        row.pack(fill="x", pady=2, padx=4)
+
+        info = ctk.CTkFrame(row, fg_color="transparent")
+        info.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        ctk.CTkLabel(info, text=ses_name[:28], font=("Inter", 12, "bold"), text_color="#dfe6e9", anchor="w").pack(anchor="w")
+        ctk.CTkLabel(info, text=ses_time, font=("Inter", 10), text_color="#636e72", anchor="w").pack(anchor="w")
+
+        def _cargar(s=ses):
+            _cargar_sesion(s)
+        def _borrar(sid=ses_id):
+            delete_session(sid)
+            _actualizar_panel_historial()
+
+        btn_frame = ctk.CTkFrame(row, fg_color="transparent")
+        btn_frame.pack(side="right", padx=4, pady=4)
+        ctk.CTkButton(btn_frame, text="📂", width=28, height=28, fg_color="#2f3640", hover_color="#3d4d6b", command=_cargar, font=("Inter", 12)).pack(pady=2)
+        ctk.CTkButton(btn_frame, text="🗑", width=28, height=28, fg_color="#3d1f2a", hover_color="#6b2737", command=_borrar, font=("Inter", 12)).pack(pady=2)
+
+def _cargar_sesion(sesion):
+    chat.configure(state="normal")
+    chat.delete("1.0", "end")
+    for msg in sesion.get("messages", []):
+        rol = msg.get("role", "")
+        contenido = msg.get("content", "")
+        if isinstance(contenido, list):
+            contenido = contenido[0].get("text", "")
+        if rol == "user":
+            chat.insert("end", f"👤 Tú:\n{contenido}\n\n")
+        elif rol == "assistant":
+            chat.insert("end", f"🤖 Agente:\n{contenido}\n\n")
+    chat.see("end")
+
+hist_search_var = tk.StringVar()
+hist_search = ctk.CTkEntry(hist_header, textvariable=hist_search_var, placeholder_text="Buscar...", width=110, height=24, font=("Inter", 11), fg_color="#1a1d2e", border_color="#2f3640")
+hist_search.pack(side="right")
+
+hist_list_frame = ctk.CTkScrollableFrame(historial_card, fg_color="transparent", height=160)
+hist_list_frame.pack(fill="x", padx=4, pady=(0, 8))
+
+def _nueva_sesion():
+    global _chat_messages_cache
+    if _chat_messages_cache:
+        nombre = f"Sesión {datetime.now().strftime('%d/%m %H:%M')}"
+        save_session(nombre, _chat_messages_cache)
+        _chat_messages_cache = []
+    chat.configure(state="normal")
+    chat.delete("1.0", "end")
+    from core.agent_runtime import _memoria
+    _memoria.limpiar()
+    _actualizar_panel_historial()
+
+btn_nueva_sesion = ctk.CTkButton(
+    historial_card, text="＋ Nueva sesión",
+    fg_color="#2f3640", hover_color="#3d4d6b",
+    height=30, corner_radius=10, font=("Inter", 11, "bold"),
+    command=_nueva_sesion
+)
+btn_nueva_sesion.pack(fill="x", padx=16, pady=(0, 10))
+
+
 
 explorer_header = ctk.CTkFrame(frame_lista_archivos, fg_color="transparent")
 explorer_header.pack(fill="x", padx=16, pady=(16, 0))
@@ -198,15 +301,67 @@ carpetas_expandidas = set()
 ultima_interaccion_arbol = 0.0
 search_filter = ""
 
+_search_debounce_id = None
+
 def aplicar_filtro_arbol(event=None):
-    global search_filter
-    search_filter = search_var.get().strip().lower()
+    global search_filter, _search_debounce_id
+    if _search_debounce_id is not None:
+        app.after_cancel(_search_debounce_id)
+    _search_debounce_id = app.after(280, _ejecutar_filtro)
+
+def _ejecutar_filtro():
+    global search_filter, _search_debounce_id
+    _search_debounce_id = None
+    nuevo = search_var.get().strip().lower()
+    search_filter = nuevo
     actualizar_arbol_archivos(forzar=True)
 
 search_entry.bind("<KeyRelease>", aplicar_filtro_arbol)
 
 # -------- FUNCIÓN CAMBIAR DIRECTORIO --------
+# -------- PANEL CLAVES API --------
+def abrir_panel_api_keys():
+    ventana = ctk.CTkToplevel(app)
+    ventana.title("🔑 Claves API y configuración")
+    ventana.geometry("560x320")
+    ventana.grab_set()
+    ventana.configure(fg_color="#151d2d")
+
+    ctk.CTkLabel(ventana, text="Claves API y configuración de acceso", font=("Inter", 16, "bold"), text_color="#f5f6fa").pack(anchor="w", padx=24, pady=(20, 4))
+    ctk.CTkLabel(ventana, text="Las claves se guardan localmente en tu perfil y nunca se envían a terceros.", font=("Inter", 11), text_color="#95a5a6").pack(anchor="w", padx=24, pady=(0, 14))
+
+    # NVIDIA API Key
+    nvidia_frame = ctk.CTkFrame(ventana, fg_color="#1c2537", corner_radius=12)
+    nvidia_frame.pack(fill="x", padx=24, pady=(0, 10))
+    ctk.CTkLabel(nvidia_frame, text="NVIDIA API Key:", font=("Inter", 12, "bold"), text_color="#b2bec3", width=160, anchor="w").pack(side="left", padx=(16, 8), pady=12)
+    
+    nvidia_key_var = tk.StringVar(value=SETTINGS.get("api_key", os.environ.get("NVIDIA_API_KEY", "")))
+    nvidia_entry = ctk.CTkEntry(nvidia_frame, textvariable=nvidia_key_var, show="●", font=("Inter", 12), fg_color="#121826", border_color="#2f3640", height=36)
+    nvidia_entry.pack(side="left", fill="x", expand=True, padx=(0, 8), pady=12)
+
+    mostrar_var = tk.BooleanVar(value=False)
+    def _toggle_show():
+        nvidia_entry.configure(show="" if mostrar_var.get() else "●")
+    ctk.CTkCheckBox(nvidia_frame, text="Mostrar", variable=mostrar_var, command=_toggle_show, font=("Inter", 11), width=80).pack(side="right", padx=(0, 12))
+
+    botones = ctk.CTkFrame(ventana, fg_color="transparent")
+    botones.pack(fill="x", padx=24, pady=16)
+
+    def guardar():
+        api_key = nvidia_key_var.get().strip()
+        SETTINGS["api_key"] = api_key
+        if api_key:
+            os.environ["NVIDIA_API_KEY"] = api_key
+        save_settings(SETTINGS)
+        ventana.destroy()
+
+    ctk.CTkButton(botones, text="Cancelar", width=110, height=38, command=ventana.destroy, fg_color="#2f3640", hover_color="#3d4d6b", corner_radius=12).pack(side="right", padx=(8, 0))
+    ctk.CTkButton(botones, text="Guardar", width=110, height=38, command=guardar, fg_color="#2980b9", hover_color="#3498db", corner_radius=12).pack(side="right")
+
+
+# -------- FUNCIÓN CAMBIAR DIRECTORIO --------
 def cambiar_directorio():
+
     ventana = ctk.CTkToplevel(app)
     ventana.title("Cambiar workspace")
     ventana.geometry("560x220")
@@ -520,35 +675,51 @@ def escribir_terminal(texto):
 # Diccionario para trackear editores abiertos {ruta_absoluta: caja_de_texto}
 editores_abiertos = {}
 
-def aplicar_sintaxis(caja, texto):
-    # Un resaltador de sintaxis de Python extremadamente básico
-    caja.tag_config("keyword", foreground="#ff79c6") # Rosa
-    caja.tag_config("string", foreground="#f1fa8c")  # Amarillo
-    caja.tag_config("comment", foreground="#6272a4") # Gris azulado
-    caja.tag_config("number", foreground="#bd93f9")  # Morado
-    caja.tag_config("def_class", foreground="#50fa7b") # Verde
-    
-    # Aplicar regex básico (requeriría un loop complejo, para simplificar lo hacemos en pasadas)
+def aplicar_sintaxis(caja, texto, filename=""):
     caja.delete("0.0", "end")
     caja.insert("0.0", texto)
 
-    # Evitamos colorear archivos muy grandes en el inicio para no bloquear la UI.
-    if len(texto) > 20000:
+    if len(texto) > 100000:
         return
 
-    keywords = ["and", "as", "assert", "break", "class", "continue", "def", "del", "elif", "else", "except", "False", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "None", "nonlocal", "not", "or", "pass", "raise", "return", "True", "try", "while", "with", "yield"]
-    
-    # Implementación ultra básica para no bloquear la UI:
-    # No coloreamos en tiempo real completo, solo lo básico.
-    for kw in keywords:
-        start = "1.0"
-        while True:
-            pos = caja.search(r"\b" + kw + r"\b", start, stopindex="end", regexp=True)
-            if not pos: break
-            length = len(kw)
-            end = f"{pos}+{length}c"
-            caja.tag_add("keyword", pos, end)
-            start = end
+    try:
+        import pygments
+        from pygments.lexers import guess_lexer_for_filename, TextLexer
+        from pygments.token import Token
+    except ImportError:
+        return
+
+    try:
+        lexer = guess_lexer_for_filename(filename, texto)
+    except Exception:
+        lexer = TextLexer()
+
+    color_map = {
+        Token.Keyword: "#ff79c6",
+        Token.Name.Class: "#50fa7b",
+        Token.Name.Function: "#50fa7b",
+        Token.Name.Builtin: "#8be9fd",
+        Token.Name.Decorator: "#50fa7b",
+        Token.String: "#f1fa8c",
+        Token.Number: "#bd93f9",
+        Token.Comment: "#6272a4",
+        Token.Operator: "#ff79c6",
+    }
+
+    for token, color in color_map.items():
+        caja.tag_config(str(token), foreground=color)
+
+    caja.mark_set("range_start", "1.0")
+    for token, content in pygments.lex(texto, lexer):
+        color_token = token
+        while color_token not in color_map and color_token.parent:
+            color_token = color_token.parent
+
+        if color_token in color_map:
+            caja.mark_set("range_end", f"range_start + {len(content)}c")
+            caja.tag_add(str(color_token), "range_start", "range_end")
+        
+        caja.mark_set("range_start", f"range_start + {len(content)}c")
 
 # -------- EDITOR DE CÓDIGO INTEGRADO --------
 def abrir_editor(ruta_absoluta, nombre):
@@ -647,7 +818,7 @@ def abrir_editor(ruta_absoluta, nombre):
     texto_editor.bind("<KeyRelease>", actualizar_numeros_de_linea)
     texto_editor.bind("<ButtonRelease-1>", actualizar_numeros_de_linea)
 
-    aplicar_sintaxis(texto_editor, contenido)
+    aplicar_sintaxis(texto_editor, contenido, nombre)
     actualizar_numeros_de_linea()
     editores_abiertos[ruta_absoluta] = texto_editor
     
@@ -661,7 +832,7 @@ def abrir_editor(ruta_absoluta, nombre):
                 f.write(nuevo_contenido)
             chat.insert("end", f"💾 Archivo '{nombre}' guardado correctamente.\n\n")
             chat.see("end")
-            aplicar_sintaxis(texto_editor, nuevo_contenido)
+            aplicar_sintaxis(texto_editor, nuevo_contenido, nombre)
             save_ui_state()
         except Exception as e:
             chat.insert("end", f"⚠️ Error al guardar: {e}\n\n")
@@ -673,8 +844,8 @@ def abrir_editor(ruta_absoluta, nombre):
         editor_tabs.delete(nombre)
         save_ui_state()
             
-    ctk.CTkButton(frame_botones, text="Guardar Cambios", command=guardar, fg_color="#2980b9", hover_color="#3498db").pack(side="left", padx=10, expand=True)
-    ctk.CTkButton(frame_botones, text="Cerrar Pestaña", command=cerrar_pestana, fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=10, expand=True)
+    ctk.CTkButton(frame_botones, text="Guardar cambios", command=guardar, fg_color="#2980b9", hover_color="#3498db").pack(side="left", padx=10, expand=True)
+    ctk.CTkButton(frame_botones, text="Cerrar pestaña", command=cerrar_pestana, fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=10, expand=True)
 
 class ClickManager:
     def __init__(self, ruta, nombre):
@@ -725,11 +896,12 @@ def toggle_frame(frame, btn, ruta_carpeta):
 
 def construir_arbol(contenedor, ruta_base):
     try:
-        nodos = listar_nodos_arbol(ruta_base, filtro=search_filter, max_items=500)
+        nodos = listar_nodos_arbol(ruta_base, filtro=search_filter, max_items=200)
     except Exception:
         return 0
 
     total = 0
+    hay_filtro = bool(search_filter)
 
     def renderizar_nodo(nodo, parent_widget, nivel=0):
         nonlocal total
@@ -737,7 +909,7 @@ def construir_arbol(contenedor, ruta_base):
             total += 1
             ruta_c = nodo["path"]
             try:
-                items = [n for n in os.listdir(ruta_c) if not n.startswith('.')]
+                items = [n for n in os.listdir(ruta_c) if not n.startswith('.') and n not in ("__pycache__", "venv", "env", "node_modules")]
                 n_files = sum(1 for n in items if os.path.isfile(os.path.join(ruta_c, n)))
                 n_dirs = sum(1 for n in items if os.path.isdir(os.path.join(ruta_c, n)))
             except Exception:
@@ -749,32 +921,14 @@ def construir_arbol(contenedor, ruta_base):
             header_frame = ctk.CTkFrame(node_frame, fg_color="#141821")
             header_frame.pack(fill="x", pady=1)
 
-            badge = ctk.CTkLabel(
-                header_frame,
-                text="📁",
-                width=30,
-                height=30,
-                fg_color="#f1c40f",
-                text_color="#1b1b1b",
-                corner_radius=8,
-                font=("Arial", 12, "bold")
-            )
+            badge = ctk.CTkLabel(header_frame, text="📁", width=30, height=30, fg_color="#f1c40f", text_color="#1b1b1b", corner_radius=8, font=("Arial", 12, "bold"))
             badge.pack(side="left", padx=(6 + nivel * 10, 10), pady=3)
 
             display_name = f"{nodo['name']}  —  {n_dirs} dirs, {n_files} files"
             sub_frame = ctk.CTkFrame(node_frame, fg_color="transparent")
             sub_frame.loaded = False
 
-            btn = ctk.CTkButton(
-                header_frame,
-                text=display_name,
-                anchor="w",
-                fg_color="transparent",
-                hover_color="#232a39",
-                text_color="#fbc531",
-                font=("Arial", 13, "bold"),
-                corner_radius=0,
-            )
+            btn = ctk.CTkButton(header_frame, text=display_name, anchor="w", fg_color="transparent", hover_color="#232a39", text_color="#fbc531", font=("Arial", 13, "bold"), corner_radius=0)
             btn.configure(command=lambda f=sub_frame, b=btn, r=ruta_c: toggle_frame(f, b, r))
             btn.pack(side="left", fill="x", expand=True, pady=3, padx=(0, 6))
 
@@ -787,7 +941,7 @@ def construir_arbol(contenedor, ruta_base):
                 for child in nodo.get("children", []):
                     renderizar_nodo(child, child_container, nivel + 1)
                 sub_frame.loaded = True
-                sub_frame.pack(fill="x", padx=(0, 0), pady=0)
+                sub_frame.pack(fill="x")
                 badge.configure(text="📂")
 
         else:
@@ -795,37 +949,48 @@ def construir_arbol(contenedor, ruta_base):
             ruta_a = nodo["path"]
             icono, color = obtener_icono(nodo["name"])
             manager = ClickManager(ruta_a, nodo["name"])
-            item_frame = ctk.CTkFrame(parent_widget, fg_color="#141821")
-            item_frame.pack(fill="x", pady=1)
 
-            badge = ctk.CTkLabel(
-                item_frame,
-                text=icono,
-                width=30,
-                height=30,
-                fg_color=color,
-                text_color="white",
-                corner_radius=8,
-                font=("Arial", 12, "bold")
-            )
-            badge.pack(side="left", padx=(6 + nivel * 10, 10), pady=3)
+            if hay_filtro:
+                match_type = nodo.get("match_type", "name")
+                snippet = nodo.get("snippet", "")
+                rel = nodo.get("rel", os.path.relpath(ruta_a, ruta_base))
 
-            btn_archivo = ctk.CTkButton(
-                item_frame,
-                text=nodo["name"],
-                anchor="w",
-                fg_color="transparent",
-                hover_color="#232a39",
-                text_color="#dcdde1",
-                font=("Arial", 13),
-                corner_radius=0,
-                command=manager.click
-            )
-            btn_archivo.pack(side="left", fill="x", expand=True, pady=3, padx=(0, 6))
+                card = ctk.CTkFrame(parent_widget, fg_color="#141821", corner_radius=8)
+                card.pack(fill="x", pady=2, padx=2)
 
-            badge.bind("<Button-1>", lambda e, m=manager: m.click())
-            badge.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
-            btn_archivo.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
+                top_row = ctk.CTkFrame(card, fg_color="transparent")
+                top_row.pack(fill="x", padx=6, pady=(4, 0))
+
+                badge_lbl = ctk.CTkLabel(top_row, text=icono, width=26, height=26, fg_color=color, text_color="white", corner_radius=6, font=("Arial", 11, "bold"))
+                badge_lbl.pack(side="left", padx=(0, 8))
+
+                tipo_txt = "nombre" if match_type == "name" else "contenido"
+                tipo_col = "#2980b9" if match_type == "name" else "#8e44ad"
+                ctk.CTkLabel(top_row, text=tipo_txt, font=("Inter", 9, "bold"), fg_color=tipo_col, text_color="white", corner_radius=4, width=60, height=18).pack(side="right", padx=(0, 4))
+
+                btn_archivo = ctk.CTkButton(top_row, text=nodo["name"], anchor="w", fg_color="transparent", hover_color="#232a39", text_color="#dcdde1", font=("Arial", 13), corner_radius=0, command=manager.click)
+                btn_archivo.pack(side="left", fill="x", expand=True)
+
+                ctk.CTkLabel(card, text=os.path.dirname(rel) or ".", font=("Inter", 10), text_color="#636e72", anchor="w").pack(fill="x", padx=(42, 8), pady=(0, 2))
+
+                if snippet:
+                    ctk.CTkLabel(card, text=f"  {snippet}", font=("Consolas", 11), text_color="#95a5a6", anchor="w", wraplength=270).pack(fill="x", padx=(42, 8), pady=(0, 4))
+
+                for w in (badge_lbl, btn_archivo, card):
+                    w.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
+            else:
+                item_frame = ctk.CTkFrame(parent_widget, fg_color="#141821")
+                item_frame.pack(fill="x", pady=1)
+
+                badge_lbl = ctk.CTkLabel(item_frame, text=icono, width=30, height=30, fg_color=color, text_color="white", corner_radius=8, font=("Arial", 12, "bold"))
+                badge_lbl.pack(side="left", padx=(6 + nivel * 10, 10), pady=3)
+
+                btn_archivo = ctk.CTkButton(item_frame, text=nodo["name"], anchor="w", fg_color="transparent", hover_color="#232a39", text_color="#dcdde1", font=("Arial", 13), corner_radius=0, command=manager.click)
+                btn_archivo.pack(side="left", fill="x", expand=True, pady=3, padx=(0, 6))
+
+                badge_lbl.bind("<Button-1>", lambda e, m=manager: m.click())
+                badge_lbl.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
+                btn_archivo.bind("<Button-3>", lambda e, r=ruta_a, n=nodo["name"]: mostrar_menu_archivo(e, r, n))
 
     for nodo in nodos:
         renderizar_nodo(nodo, contenedor)
@@ -842,7 +1007,7 @@ def _get_tree_hash(base):
         rel_dir = os.path.relpath(ruta, base)
         if rel_dir == ".":
             rel_dir = ""
-        carpetas[:] = sorted([c for c in carpetas if not c.startswith(".")])
+        carpetas[:] = sorted([c for c in carpetas if not c.startswith(".") and c not in ("__pycache__", "venv", "env", "node_modules")])
         ficheros = sorted([f for f in ficheros if not f.startswith(".")])
 
         for c in carpetas:
@@ -923,14 +1088,69 @@ lbl_estado.pack(anchor="w")
 botones_header = ctk.CTkFrame(agente_header, fg_color="transparent")
 botones_header.pack(side="right", padx=10)
 
-# Ajustes
+# -------- EDITOR DE SYSTEM PROMPT --------
+ROLES_PREDEFINIDOS = {
+    "Ninguno": "",
+    "Experto Python": "Eres un experto en Python. Escribe código limpio, idiomático y bien documentado. Usa type hints y sigue PEP 8.",
+    "Arquitecto de Software": "Eres un arquitecto de software senior. Propones diseños escalables, aplicas SOLID y piensas en el largo plazo antes de escribir código.",
+    "Frontend Dev": "Eres un experto frontend especializado en HTML, CSS, JavaScript y React. Creas UIs modernas, accesibles y responsive.",
+    "DevOps": "Eres un experto en DevOps. Dominas Docker, CI/CD, Kubernetes y automatización. Priorizas la seguridad y la infraestructura como código.",
+    "Revisor de Código": "Actúa como revisor de código senior. Detecta bugs, vulnerabilidades de seguridad, código muerto y sugiere mejoras con explicaciones claras.",
+    "Asistente Conciso": "Responde siempre de forma ultra concisa. Sin explicaciones largas. Código directo y funcional.",
+}
+
+def abrir_editor_prompt():
+    ventana = ctk.CTkToplevel(app)
+    ventana.title("⚙️ System Prompt del Agente")
+    ventana.geometry("600x520")
+    ventana.grab_set()
+    ventana.configure(fg_color="#151d2d")
+
+    ctk.CTkLabel(ventana, text="Configura el rol y comportamiento del agente", font=("Inter", 16, "bold"), text_color="#f5f6fa").pack(anchor="w", padx=24, pady=(20, 4))
+    ctk.CTkLabel(ventana, text="Las instrucciones se aplican en todas las conversaciones de esta sesión.", font=("Inter", 11), text_color="#95a5a6").pack(anchor="w", padx=24, pady=(0, 12))
+
+    # Selector de roles predefinidos
+    roles_frame = ctk.CTkFrame(ventana, fg_color="#1c2537", corner_radius=12)
+    roles_frame.pack(fill="x", padx=24, pady=(0, 12))
+    ctk.CTkLabel(roles_frame, text="Rol predefinido:", font=("Inter", 12, "bold"), text_color="#b2bec3").pack(side="left", padx=(16, 8), pady=12)
+    rol_var = tk.StringVar(value="Ninguno")
+    rol_menu = ctk.CTkOptionMenu(roles_frame, values=list(ROLES_PREDEFINIDOS.keys()), variable=rol_var, width=200, height=32, font=("Inter", 12))
+    rol_menu.pack(side="left", pady=12)
+
+    # Textbox del prompt
+    ctk.CTkLabel(ventana, text="Instrucciones personalizadas:", font=("Inter", 12, "bold"), text_color="#b2bec3").pack(anchor="w", padx=24)
+    caja = ctk.CTkTextbox(ventana, font=("Inter", 13), wrap="word", fg_color="#121826", border_color="#2f3640", border_width=1, corner_radius=12)
+    caja.pack(fill="both", expand=True, padx=24, pady=(6, 0))
+    caja.insert("0.0", SETTINGS.get("system_prompt", ""))
+
+    def _aplicar_rol(*_):
+        rol = rol_var.get()
+        texto = ROLES_PREDEFINIDOS.get(rol, "")
+        if texto:
+            caja.delete("0.0", "end")
+            caja.insert("0.0", texto)
+    rol_var.trace_add("write", _aplicar_rol)
+
+    botones = ctk.CTkFrame(ventana, fg_color="transparent")
+    botones.pack(fill="x", padx=24, pady=12)
+
+    def guardar():
+        prompt = caja.get("0.0", "end-1c").strip()
+        SETTINGS["system_prompt"] = prompt
+        save_settings(SETTINGS)
+        set_instrucciones(prompt)
+        ventana.destroy()
+
+    ctk.CTkButton(botones, text="Cancelar", width=110, height=38, command=ventana.destroy, fg_color="#2f3640", hover_color="#3d4d6b", corner_radius=12).pack(side="right", padx=(8, 0))
+    ctk.CTkButton(botones, text="Guardar", width=110, height=38, command=guardar, fg_color="#2980b9", hover_color="#3498db", corner_radius=12).pack(side="right")
+
 def abrir_ajustes():
     ventana = ctk.CTkToplevel(app)
     ventana.title("⚙️ Ajustes del agente")
     ventana.geometry("560x480")
     ventana.grab_set()
 
-    ctk.CTkLabel(ventana, text="Instrucciones Extra (System Prompt):", font=("Arial", 14, "bold")).pack(pady=(10, 4))
+    ctk.CTkLabel(ventana, text="Instrucciones extra (System Prompt):", font=("Arial", 14, "bold")).pack(pady=(10, 4))
 
     from agente import instrucciones_extra
     caja = ctk.CTkTextbox(ventana, font=("Arial", 14), wrap="word")
@@ -953,7 +1173,7 @@ def abrir_ajustes():
         selector_modelo.set(SETTINGS["model"])
         ventana.destroy()
 
-    ctk.CTkButton(ventana, text="Guardar Ajustes", command=guardar_ajustes).pack(pady=10)
+    ctk.CTkButton(ventana, text="Guardar ajustes", command=guardar_ajustes).pack(pady=10)
 
 btn_ajustes = ctk.CTkButton(
     botones_header, text="⚙️", width=34, height=34,
@@ -961,6 +1181,64 @@ btn_ajustes = ctk.CTkButton(
     corner_radius=8, font=("Arial", 14), command=abrir_ajustes
 )
 btn_ajustes.pack(side="left", padx=(0, 6))
+
+# Botón editor de system prompt
+btn_prompt = ctk.CTkButton(
+    botones_header, text="📝", width=34, height=34,
+    fg_color="#2f3655", hover_color="#3d4775",
+    corner_radius=8, font=("Arial", 14), command=abrir_editor_prompt
+)
+btn_prompt.pack(side="left", padx=(0, 6))
+
+# Botón exportar conversación
+def exportar_conversacion():
+    from ui.folder_picker import show_file_picker
+    nombre_default = f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+    ventana_exp = ctk.CTkToplevel(app)
+    ventana_exp.title("Exportar conversación")
+    ventana_exp.geometry("480x180")
+    ventana_exp.grab_set()
+    ventana_exp.configure(fg_color="#151d2d")
+
+    ctk.CTkLabel(ventana_exp, text="Exportar conversación a Markdown", font=("Inter", 15, "bold"), text_color="#f5f6fa").pack(anchor="w", padx=24, pady=(20, 4))
+
+    nombre_var = tk.StringVar(value=nombre_default)
+    frame_n = ctk.CTkFrame(ventana_exp, fg_color="#1c2537", corner_radius=12)
+    frame_n.pack(fill="x", padx=24, pady=(8, 0))
+    ctk.CTkLabel(frame_n, text="Nombre:", width=70, anchor="w", font=("Inter", 12)).pack(side="left", padx=(12, 6), pady=10)
+    ctk.CTkEntry(frame_n, textvariable=nombre_var, font=("Inter", 12), fg_color="#121826", border_color="#2f3640").pack(side="left", fill="x", expand=True, padx=(0, 12), pady=10)
+
+    def _hacer_export():
+        nombre = nombre_var.get().strip()
+        if not nombre:
+            return
+        if not nombre.endswith(".md"):
+            nombre += ".md"
+        ruta_dest = os.path.join(get_directorio_base(), nombre)
+        contenido_chat = chat.get("1.0", "end-1c")
+        try:
+            with open(ruta_dest, "w", encoding="utf-8") as f:
+                f.write(f"# Conversación - {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n")
+                f.write(contenido_chat)
+            chat.insert("end", f"\n\n📤 Conversación exportada como '{nombre}'\n\n")
+            chat.see("end")
+            actualizar_arbol_archivos(forzar=True)
+            ventana_exp.destroy()
+        except Exception as e:
+            chat.insert("end", f"⚠️ Error al exportar: {e}\n\n")
+            ventana_exp.destroy()
+
+    botones_exp = ctk.CTkFrame(ventana_exp, fg_color="transparent")
+    botones_exp.pack(fill="x", padx=24, pady=12)
+    ctk.CTkButton(botones_exp, text="Cancelar", width=100, command=ventana_exp.destroy, fg_color="#2f3640", hover_color="#3d4d6b", corner_radius=10).pack(side="right", padx=(8, 0))
+    ctk.CTkButton(botones_exp, text="📤 Exportar", width=120, command=_hacer_export, fg_color="#2980b9", hover_color="#3498db", corner_radius=10).pack(side="right")
+
+btn_export = ctk.CTkButton(
+    botones_header, text="📤", width=34, height=34,
+    fg_color="#2f3655", hover_color="#3d4775",
+    corner_radius=8, font=("Arial", 14), command=exportar_conversacion
+)
+btn_export.pack(side="left", padx=(0, 6))
 
 # -------- PANEL DE TAREAS Y TRAZABILIDAD --------
 tasks_frame = ctk.CTkFrame(right_pane, fg_color="#22253a", corner_radius=10)
@@ -1173,6 +1451,50 @@ boton = ctk.CTkButton(
 )
 boton.pack(side="right")
 
+_imagen_adjunta = None
+
+image_card = ctk.CTkFrame(zona, fg_color="#191f2f", corner_radius=20, border_width=1, border_color="#2f3640")
+
+img_header = ctk.CTkFrame(image_card, fg_color="transparent")
+img_header.pack(fill="x", padx=16, pady=(12, 4))
+
+ctk.CTkLabel(img_header, text="IMAGEN ADJUNTA", font=("Inter", 11, "bold"), text_color="#7f8fa6").pack(side="left")
+ctk.CTkLabel(img_header, text="●", font=("Inter", 12, "bold"), text_color="#3498db").pack(side="right")
+
+img_filename_label = ctk.CTkLabel(image_card, text="", font=("Inter", 14, "bold"), text_color="#f5f6fa")
+img_filename_label.pack(anchor="w", padx=16)
+
+def quitar_imagen():
+    global _imagen_adjunta
+    _imagen_adjunta = None
+    image_card.pack_forget()
+
+btn_quitar_img = ctk.CTkButton(image_card, text="Quitar", fg_color="#c0392b", hover_color="#e74c3c", width=80, height=28, command=quitar_imagen)
+btn_quitar_img.pack(anchor="w", padx=16, pady=(8, 12))
+
+def seleccionar_imagen():
+    global _imagen_adjunta
+    import base64
+    import os
+    from ui.folder_picker import show_file_picker
+    ruta = show_file_picker(app, initialdir=get_directorio_base(), filetypes=["*.png", "*.jpg", "*.jpeg", "*.gif"])
+    if ruta:
+        try:
+            with open(ruta, "rb") as img_file:
+                _imagen_adjunta = base64.b64encode(img_file.read()).decode("utf-8")
+            img_filename_label.configure(text=os.path.basename(ruta))
+            image_card.pack(fill="x", padx=8, pady=(0, 8), before=fila_input)
+        except Exception as e:
+            print("Error cargando imagen", e)
+
+btn_imagen = ctk.CTkButton(
+    fila_input, text="📎", width=40, height=40,
+    fg_color="#3d4775", hover_color="#5468a8",
+    corner_radius=8, font=("Inter", 13, "bold"),
+    command=seleccionar_imagen
+)
+btn_imagen.pack(side="right", padx=(0, 8))
+
 def escribir(texto, end="\n\n", tags=None):
     if tags:
         chat.insert("end", texto + end, tags)
@@ -1371,7 +1693,7 @@ def parse_and_insert(texto, start_index):
 
 
 def responder(auto_mensaje=None):
-    global cancelar_generacion, auto_corregido
+    global cancelar_generacion, auto_corregido, _imagen_adjunta
     cancelar_generacion = False
 
     if auto_mensaje:
@@ -1379,22 +1701,34 @@ def responder(auto_mensaje=None):
     else:
         mensaje = entrada.get()
         auto_corregido = False
+        
+    if _imagen_adjunta and mensaje:
+        mensaje_original = mensaje
+        mensaje = [
+            {"type": "text", "text": mensaje_original},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_imagen_adjunta}"}}
+        ]
+        _imagen_adjunta = None
+        image_card.pack_forget()
 
     if mensaje == "":
         return
 
-    modo_programacion = "plan" in mensaje.lower() or "pasos" in mensaje.lower() or "modo programación" in mensaje.lower()
+    mensaje_texto = mensaje if isinstance(mensaje, str) else mensaje[0]['text']
+    modo_programacion = "plan" in mensaje_texto.lower() or "pasos" in mensaje_texto.lower() or "modo programación" in mensaje_texto.lower()
     if modo_programacion:
-        mensaje = f"Actúa como agente de programación. Divide esta solicitud en pasos claros y explícitos. Solicitud: {mensaje}"
+        if isinstance(mensaje, str): mensaje = f"Actúa como agente de programación. Divide esta solicitud en pasos claros y explícitos. Solicitud: {mensaje}"
         append_task("plan", f"Planificando: {mensaje[:80]}")
 
     entrada.delete(0, "end")
     append_conversation({"role": "user", "content": mensaje})
+    _chat_messages_cache.append({"role": "user", "content": mensaje})
 
+    mensaje_texto = mensaje if isinstance(mensaje, str) else mensaje[0]["text"]
     if not auto_mensaje:
-        escribir("👤 Tú:\n" + mensaje)
+        escribir("👤 Tú:\n" + mensaje_texto + (" [🖼️ Imagen adjunta]" if not isinstance(mensaje, str) else ""))
     else:
-        escribir(f"🤖 Ejecución automática:\n{mensaje}")
+        escribir(f"🤖 Ejecución automática:\n{mensaje_texto}")
         
     escribir("🤖 Agente: ⏳ Iniciando modelo (puede tardar unos segundos)...\n", end="")
     chat.mark_set("inicio_respuesta", "end-1c")
@@ -1408,18 +1742,33 @@ def responder(auto_mensaje=None):
         evento = threading.Event()
         
         def mostrar_dialogo():
+            es_parche = nombre.startswith("PARCHE a ")
             ventana = ctk.CTkToplevel(app)
-            ventana.title(f"⚠️ Confirmar sobreescritura: {nombre}")
-            ventana.geometry("600x400")
+            ventana.title(f"⚠️ {'Revisar parche' if es_parche else 'Confirmar sobreescritura'}: {nombre}")
+            ventana.geometry("680x460")
             ventana.grab_set()
+            ventana.configure(fg_color="#151d2d")
             
-            ctk.CTkLabel(ventana, text=f"El agente quiere modificar el archivo existente:\n{nombre}", font=("Arial", 14, "bold")).pack(pady=10)
+            titulo_txt = f"Parche para: {nombre.replace('PARCHE a ', '')}" if es_parche else f"Modificar archivo existente: {nombre}"
+            ctk.CTkLabel(ventana, text=titulo_txt, font=("Inter", 13, "bold"), text_color="#f5f6fa", wraplength=600).pack(pady=(14, 4), padx=20)
+
+            if es_parche:
+                ctk.CTkLabel(ventana, text="🟢 verde = añadido  |  🔴 rojo = eliminado", font=("Inter", 11), text_color="#7f8fa6").pack(pady=(0, 6))
             
-            # Textbox con el código propuesto
-            caja = ctk.CTkTextbox(ventana, font=("Consolas", 14), wrap="none")
-            caja.pack(fill="both", expand=True, padx=20, pady=10)
-            caja.insert("0.0", codigo)
-            caja.configure(state="disabled") # Solo lectura
+            caja = ctk.CTkTextbox(ventana, font=("Consolas", 13), wrap="none", fg_color="#0d1117", border_color="#2f3640", border_width=1, corner_radius=10)
+            caja.pack(fill="both", expand=True, padx=20, pady=4)
+            caja.tag_config("add", foreground="#2ecc71")
+            caja.tag_config("del", foreground="#e74c3c")
+            caja.tag_config("ctx", foreground="#b2bec3")
+
+            for linea in codigo.splitlines(keepends=True):
+                if linea.startswith("+"):
+                    caja.insert("end", linea, "add")
+                elif linea.startswith("-"):
+                    caja.insert("end", linea, "del")
+                else:
+                    caja.insert("end", linea, "ctx")
+            caja.configure(state="disabled")
             
             botones_frame = ctk.CTkFrame(ventana, fg_color="transparent")
             botones_frame.pack(fill="x", pady=10)
@@ -1434,14 +1783,13 @@ def responder(auto_mensaje=None):
                 ventana.destroy()
                 evento.set()
                 
-            ctk.CTkButton(botones_frame, text="✅ Aceptar cambios", fg_color="#27ae60", hover_color="#2ecc71", command=al_aceptar).pack(side="left", expand=True, padx=10)
-            ctk.CTkButton(botones_frame, text="❌ Rechazar", fg_color="#c0392b", hover_color="#e74c3c", command=al_rechazar).pack(side="right", expand=True, padx=10)
+            ctk.CTkButton(botones_frame, text="✅ Aceptar cambios", fg_color="#27ae60", hover_color="#2ecc71", height=38, corner_radius=10, command=al_aceptar).pack(side="left", expand=True, padx=10)
+            ctk.CTkButton(botones_frame, text="❌ Rechazar", fg_color="#c0392b", hover_color="#e74c3c", height=38, corner_radius=10, command=al_rechazar).pack(side="right", expand=True, padx=10)
             
-            # Por si el usuario cierra la ventana con la X
             ventana.protocol("WM_DELETE_WINDOW", al_rechazar)
 
         app.after(0, mostrar_dialogo)
-        evento.wait() # Bloquea el hilo de la IA hasta que el usuario responda
+        evento.wait()
         return resultado[0]
 
     threading.Thread(
@@ -1485,6 +1833,7 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura, modo_program
                 app.after(0, actualizar_arbol_archivos)
                 app.after(0, actualizar_panel_tareas)
                 append_conversation({"role": "assistant", "content": texto_acumulado})
+                _chat_messages_cache.append({"role": "assistant", "content": texto_acumulado})
                 append_task("respuesta", f"Respuesta procesada para: {mensaje[:80]}")
                 if modo_programacion:
                     pasos = extract_steps(texto_acumulado)
@@ -1571,4 +1920,71 @@ def vigilar_archivos():
     app.after(2000, vigilar_archivos)
 
 app.after_idle(iniciar_carga_inicial)
+
+# -------- KEYBINDINGS GLOBALES --------
+def _kb_enviar(e=None):
+    responder()
+    return "break"
+
+def _kb_limpiar(e=None):
+    chat.configure(state="normal")
+    chat.delete("1.0", "end")
+    return "break"
+
+def _kb_foco_entrada(e=None):
+    entrada.focus_set()
+    return "break"
+
+def _kb_prompt(e=None):
+    abrir_editor_prompt()
+    return "break"
+
+def _kb_guardar_editor(e=None):
+    try:
+        tab_actual = editor_tabs.get()
+        for ruta, caja in editores_abiertos.items():
+            if os.path.basename(ruta) == tab_actual:
+                nuevo = caja.get("0.0", "end-1c")
+                with open(ruta, "w", encoding="utf-8") as f:
+                    f.write(nuevo)
+                chat.insert("end", f"💾 '{tab_actual}' guardado.\n\n")
+                chat.see("end")
+                break
+    except Exception:
+        pass
+    return "break"
+
+def _kb_cerrar_tab(e=None):
+    try:
+        tab_actual = editor_tabs.get()
+        for ruta in list(editores_abiertos.keys()):
+            if os.path.basename(ruta) == tab_actual:
+                del editores_abiertos[ruta]
+                editor_tabs.delete(tab_actual)
+                break
+    except Exception:
+        pass
+    return "break"
+
+app.bind_all("<Control-Return>", _kb_enviar)
+app.bind_all("<Control-l>", _kb_limpiar)
+app.bind_all("<Control-L>", _kb_limpiar)
+app.bind_all("<Control-e>", _kb_foco_entrada)
+app.bind_all("<Control-E>", _kb_foco_entrada)
+app.bind_all("<Control-k>", _kb_prompt)
+app.bind_all("<Control-K>", _kb_prompt)
+app.bind_all("<Control-s>", _kb_guardar_editor)
+app.bind_all("<Control-S>", _kb_guardar_editor)
+app.bind_all("<Control-w>", _kb_cerrar_tab)
+app.bind_all("<Control-W>", _kb_cerrar_tab)
+
+# -------- CARGAR API KEY Y SYSTEM PROMPT GUARDADOS --------
+_saved_key = SETTINGS.get("api_key", "")
+if _saved_key:
+    os.environ.setdefault("NVIDIA_API_KEY", _saved_key)
+
+_saved_prompt = SETTINGS.get("system_prompt", "")
+if _saved_prompt:
+    set_instrucciones(_saved_prompt)
+
 app.mainloop()

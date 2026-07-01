@@ -60,26 +60,31 @@ class CommandGuard:
             callback(f"$ {command}")
 
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 parts,
                 cwd=self.cwd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=10,
-                check=False,
+                bufsize=1,
             )
-            output = result.stdout or ""
-            if result.stderr:
-                output = f"{output}\n[ERROR]\n{result.stderr}".strip()
+            
+            output_lines = []
+            while True:
+                line = process.stdout.readline()
+                if not line and process.poll() is not None:
+                    break
+                if line:
+                    if callback:
+                        callback(line)
+                    output_lines.append(line)
+                    
+            returncode = process.poll()
+            output = "".join(output_lines)
             if not output:
                 output = "Ejecución finalizada sin salida."
-            if callback:
-                callback(output)
             return output
-        except subprocess.TimeoutExpired:
-            message = "Error: La ejecución excedió el límite de 10 segundos y fue cancelada."
-            if callback:
-                callback(message)
-            return message
         except FileNotFoundError:
-            return "Ejecución finalizada sin salida."
+            return "Ejecución finalizada sin salida. (Comando no encontrado)"
+        except Exception as exc:
+            return f"Error: {exc}"

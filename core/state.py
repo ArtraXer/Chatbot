@@ -1,5 +1,6 @@
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
@@ -7,6 +8,7 @@ from typing import Any, Dict, List
 _config_path = None
 _history_path = None
 _tasks_path = None
+_sessions_dir = None
 
 
 def _base_dir() -> Path:
@@ -57,12 +59,22 @@ def _write_json(path: Path, data: Any) -> None:
         json.dump(data, fh, ensure_ascii=False, indent=2)
 
 
+def _get_sessions_dir() -> Path:
+    global _sessions_dir
+    if _sessions_dir is None:
+        _sessions_dir = _ensure_dir() / "sessions"
+        _sessions_dir.mkdir(parents=True, exist_ok=True)
+    return _sessions_dir
+
+
 def load_settings() -> Dict[str, Any]:
     default = {
         "model": "meta/llama-3.1-8b-instruct",
         "safe_mode": True,
         "workdir": "",
         "theme": "dark",
+        "system_prompt": "",
+        "api_key": "",
     }
     data = _read_json(_get_config_path(), default)
     if not isinstance(data, dict):
@@ -121,3 +133,42 @@ def clear_tasks() -> None:
 
 def clear_history() -> None:
     _write_json(_get_history_path(), [])
+
+
+# ---- SESIONES DE CHAT ----
+
+def save_session(name: str, messages: List[Dict]) -> str:
+    """Guarda una lista de mensajes como una sesión con nombre. Devuelve el ID."""
+    sessions_dir = _get_sessions_dir()
+    session_id = str(uuid.uuid4())[:8]
+    session = {
+        "id": session_id,
+        "name": name or f"Sesión {datetime.now().strftime('%d/%m %H:%M')}",
+        "timestamp": datetime.now().isoformat(),
+        "messages": messages,
+    }
+    path = sessions_dir / f"{session_id}.json"
+    _write_json(path, session)
+    return session_id
+
+
+def load_sessions() -> List[Dict]:
+    """Carga todas las sesiones guardadas, ordenadas por fecha (más reciente primero)."""
+    sessions_dir = _get_sessions_dir()
+    sessions = []
+    for path in sessions_dir.glob("*.json"):
+        try:
+            data = _read_json(path, None)
+            if data and isinstance(data, dict):
+                sessions.append(data)
+        except Exception:
+            pass
+    return sorted(sessions, key=lambda s: s.get("timestamp", ""), reverse=True)
+
+
+def delete_session(session_id: str) -> None:
+    """Elimina una sesión por su ID."""
+    sessions_dir = _get_sessions_dir()
+    path = sessions_dir / f"{session_id}.json"
+    if path.exists():
+        path.unlink()
