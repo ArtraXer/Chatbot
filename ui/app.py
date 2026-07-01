@@ -28,9 +28,30 @@ ctk.set_default_color_theme("blue")
 
 SETTINGS = load_settings()
 
+
+def save_ui_state():
+    SETTINGS["open_files"] = list(editores_abiertos.keys())
+    SETTINGS["workdir"] = get_directorio_base()
+    SETTINGS["model"] = selector_modelo.get() if "selector_modelo" in globals() else SETTINGS.get("model")
+    save_settings(SETTINGS)
+
+
+def cargar_estado_ui():
+    workdir = SETTINGS.get("workdir", "")
+    if workdir and os.path.isdir(workdir):
+        set_directorio_base(workdir)
+        titulo_archivos.configure(text=os.path.basename(workdir))
+
+    for ruta in SETTINGS.get("open_files", []):
+        if os.path.isfile(ruta):
+            abrir_editor(ruta, os.path.basename(ruta))
+
+
 app = ctk.CTk()
 app.title("Artraxer AI Agent Premium")
 app.geometry("1200x750")
+
+app.protocol("WM_DELETE_WINDOW", lambda: (save_ui_state(), app.destroy()))
 
 cancelar_generacion = False
 auto_corregido = False
@@ -88,6 +109,7 @@ def cambiar_directorio():
         nombre_carpeta = os.path.basename(ruta)
         titulo_archivos.configure(text=nombre_carpeta)
         actualizar_arbol_archivos(forzar=True)
+        save_ui_state()
 
 # -------- MENÚ CONTEXTUAL CUSTOMTKINTER --------
 class MenuContextualCustom(ctk.CTkToplevel):
@@ -355,11 +377,46 @@ def abrir_editor(ruta_absoluta, nombre):
     editor_tabs.set(nombre)
     tab = editor_tabs.tab(nombre)
     
-    # Texto
-    texto_editor = ctk.CTkTextbox(tab, font=("Consolas", 14), wrap="none")
-    texto_editor.pack(fill="both", expand=True, padx=5, pady=5)
-    
+    editor_area = ctk.CTkFrame(tab, fg_color="transparent")
+    editor_area.pack(fill="both", expand=True, padx=5, pady=5)
+
+    line_numbers = ctk.CTkTextbox(
+        editor_area, width=60, fg_color="#1e272e", text_color="#7f8c8d",
+        font=("Consolas", 12), state="disabled", corner_radius=8,
+        wrap="none", border_width=0
+    )
+    line_numbers.pack(side="left", fill="y", padx=(0, 6), pady=0)
+
+    texto_editor = ctk.CTkTextbox(editor_area, font=("Consolas", 14), wrap="none")
+    texto_editor.pack(side="left", fill="both", expand=True)
+
+    scrollbar = ctk.CTkScrollbar(editor_area, orientation="vertical")
+    scrollbar.pack(side="right", fill="y", pady=0)
+
+    def sync_scroll(*args):
+        line_numbers.yview_moveto(args[0])
+        texto_editor.yview_moveto(args[0])
+        scrollbar.set(*args)
+
+    texto_editor.configure(yscrollcommand=lambda *args: sync_scroll(*args))
+    line_numbers.configure(yscrollcommand=lambda *args: sync_scroll(*args))
+    scrollbar.configure(command=sync_scroll)
+
+    def actualizar_numeros_de_linea(event=None):
+        contenido_actual = texto_editor.get("0.0", "end-1c")
+        line_count = max(contenido_actual.count("\n") + 1, 1)
+        numeros = "\n".join(str(i) for i in range(1, line_count + 1))
+        line_numbers.configure(state="normal")
+        line_numbers.delete("0.0", "end")
+        line_numbers.insert("0.0", numeros)
+        line_numbers.configure(state="disabled")
+
+    texto_editor.bind("<KeyRelease>", actualizar_numeros_de_linea)
+    texto_editor.bind("<MouseWheel>", actualizar_numeros_de_linea)
+    texto_editor.bind("<ButtonRelease-1>", actualizar_numeros_de_linea)
+
     aplicar_sintaxis(texto_editor, contenido)
+    actualizar_numeros_de_linea()
     editores_abiertos[ruta_absoluta] = texto_editor
     
     frame_botones = ctk.CTkFrame(tab, fg_color="transparent")
@@ -372,12 +429,17 @@ def abrir_editor(ruta_absoluta, nombre):
                 f.write(nuevo_contenido)
             chat.insert("end", f"💾 Archivo '{nombre}' guardado correctamente.\n\n")
             chat.see("end")
+            aplicar_sintaxis(texto_editor, nuevo_contenido)
+            save_ui_state()
         except Exception as e:
             chat.insert("end", f"⚠️ Error al guardar: {e}\n\n")
+            chat.see("end")
             
     def cerrar_pestana():
-        del editores_abiertos[ruta_absoluta]
+        if ruta_absoluta in editores_abiertos:
+            del editores_abiertos[ruta_absoluta]
         editor_tabs.delete(nombre)
+        save_ui_state()
             
     ctk.CTkButton(frame_botones, text="Guardar Cambios", command=guardar, fg_color="#2980b9", hover_color="#3498db").pack(side="left", padx=10, expand=True)
     ctk.CTkButton(frame_botones, text="Cerrar Pestaña", command=cerrar_pestana, fg_color="#c0392b", hover_color="#e74c3c").pack(side="right", padx=10, expand=True)
@@ -1019,11 +1081,27 @@ def responder(auto_mensaje=None):
 
     threading.Thread(
         target=trabajo_ia,
-        args=(mensaje, modelo_seleccionado, idx_inicio_respuesta, confirmacion_ui_segura),
+        args=(mensaje, modelo_seleccionado, idx_inicio_respuesta, confirmacion_ui_segura, modo_programacion),
         daemon=True
     ).start()
 
-def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
+def extract_steps(texto):
+    pasos = []
+    for linea in texto.splitlines():
+        linea = linea.strip()
+        if not linea:
+            continue
+        match = re.match(r'^(?:\d+[\.)]|[-*•])\s*(.+)$', linea)
+        if match:
+            pasos.append(match.group(1).strip())
+            continue
+        if linea.lower().startswith("paso "):
+            pasos.append(linea)
+            continue
+    return pasos
+
+
+def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura, modo_programacion=False):
     global auto_corregido
     
     texto_acumulado = ""
@@ -1044,8 +1122,16 @@ def trabajo_ia(mensaje, modelo, idx_inicio, confirmacion_ui_segura):
                 app.after(0, actualizar_panel_tareas)
                 append_conversation({"role": "assistant", "content": texto_acumulado})
                 append_task("respuesta", f"Respuesta procesada para: {mensaje[:80]}")
-                if "plan" in mensaje.lower() or "pasos" in mensaje.lower() or "modo programación" in mensaje.lower():
+                if modo_programacion:
+                    pasos = extract_steps(texto_acumulado)
+                    if pasos:
+                        for idx, paso in enumerate(pasos, start=1):
+                            append_task("plan_step", f"Paso {idx}: {paso}", estado="pendiente")
+                    else:
+                        append_task("plan_step", "No se pudieron extraer pasos del resultado.", estado="pendiente")
                     append_task("programacion", "Se activó el modo agente de programación")
+                
+                app.after(0, actualizar_panel_tareas)
                 
                 comando_info = comando_output if comando_output else (None, False)
                 output_texto, auto_reply = comando_info
@@ -1091,6 +1177,7 @@ def cargar_historial_ui():
         else:
             escribir(f"🤖 Agente:\n{contenido}")
 
+cargar_estado_ui()
 cargar_historial_ui()
 actualizar_panel_tareas()
 
